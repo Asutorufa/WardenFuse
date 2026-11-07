@@ -1,14 +1,20 @@
 import AppKit
 import SwiftUI
 
-/// Native Settings window in the standard macOS layout: toolbar tabs (rendered with Liquid
-/// Glass by the system on macOS 26+) and grouped forms. Every change is submitted to the core,
-/// which validates and applies it; the form always reflects what the core reports back.
+/// Settings window modelled on macOS System Settings: a full-height sidebar with search,
+/// colored icon tiles and the account at the top; each pane starts with a header card followed
+/// by grouped forms. Hosted in a regular resizable `Window` scene. Every change is submitted to
+/// the core, which validates and applies it; the form always reflects what the core reports.
 struct SettingsView: View {
     @EnvironmentObject var core: CoreBridge
-    @AppStorage("settingsPane") private var pane: Pane = .general
+    @AppStorage("settingsPane") private var stored: Pane = .general
+    @State private var selection: Pane?
+    @State private var back: [Pane] = []
+    @State private var forward: [Pane] = []
+    @State private var navigating = false
+    @State private var query = ""
 
-    enum Pane: String, CaseIterable, Identifiable {
+    enum Pane: String, CaseIterable, Identifiable, Hashable {
         case general, bitwarden, browser, ssh, security
         var id: String { rawValue }
         var title: String {
@@ -22,44 +28,225 @@ struct SettingsView: View {
         }
         var symbol: String {
             switch self {
-            case .general: "gearshape"
-            case .bitwarden: "person.crop.circle"
+            case .general: "gearshape.fill"
+            case .bitwarden: "person.crop.circle.fill"
             case .browser: "globe"
-            case .ssh: "terminal"
-            case .security: "lock.shield"
+            case .ssh: "terminal.fill"
+            case .security: "lock.shield.fill"
             }
         }
+        var tint: Color {
+            switch self {
+            case .general: .gray
+            case .bitwarden: .blue
+            case .browser: .teal
+            case .ssh: Color(white: 0.25)
+            case .security: .indigo
+            }
+        }
+        var summary: String {
+            switch self {
+            case .general: "Start at login, the menu bar icon and the status of WardenFuse."
+            case .bitwarden: "Your Bitwarden account, server and vault synchronization."
+            case .browser: "Unlock the official Bitwarden browser extension with Touch ID."
+            case .ssh: "Serve the SSH keys in your vault to ssh, Git and other tools."
+            case .security: "How WardenFuse authenticates you and protects your keys."
+            }
+        }
+        var keywords: String {
+            switch self {
+            case .general: "login launch menu bar icon status"
+            case .bitwarden: "account server url sync login logout email vaultwarden"
+            case .browser: "chrome brave edge native messaging extension biometrics"
+            case .ssh: "socket ttl scope forwarding ssh config git signing keys"
+            case .security: "touch id password keychain lock sleep reset"
+            }
+        }
+    }
+
+    private var visiblePanes: [Pane] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return Pane.allCases }
+        return Pane.allCases.filter { "\($0.title) \($0.keywords)".lowercased().contains(q) }
     }
 
     var body: some View {
-        TabView(selection: $pane) {
-            ForEach(Pane.allCases) { p in
-                content(p)
-                    .formStyle(.grouped)
-                    .tabItem { Label(p.title, systemImage: p.symbol) }
-                    .tag(p)
+        NavigationSplitView {
+            List(selection: $selection) {
+                if query.isEmpty, let s = core.snapshot {
+                    AccountRow(s: s)
+                        .padding(.vertical, 4)
+                        .tag(Pane.bitwarden)
+                }
+                Section {
+                    ForEach(visiblePanes) { p in
+                        Label {
+                            Text(p.title)
+                        } icon: {
+                            IconTile(symbol: p.symbol, tint: p.tint, size: 22)
+                        }
+                        .tag(p)
+                    }
+                }
             }
+            .listStyle(.sidebar)
+            .searchable(text: $query, placement: .sidebar, prompt: "Search")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            detail
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        ControlGroup {
+                            Button { navigate(back: true) } label: { Image(systemName: "chevron.left") }
+                                .disabled(back.isEmpty)
+                                .help("Back")
+                                .accessibilityLabel("Back")
+                            Button { navigate(back: false) } label: { Image(systemName: "chevron.right") }
+                                .disabled(forward.isEmpty)
+                                .help("Forward")
+                                .accessibilityLabel("Forward")
+                        }
+                    }
+                }
         }
-        .frame(minWidth: 560, idealWidth: 640, maxWidth: .infinity,
-               minHeight: 420, idealHeight: 540, maxHeight: .infinity)
+        .toolbar(removing: .title)
+        .frame(minWidth: 720, idealWidth: 820, maxWidth: .infinity,
+               minHeight: 480, idealHeight: 620, maxHeight: .infinity)
+        .onAppear { if selection == nil { selection = stored } }
+        .onChange(of: selection) { old, new in
+            guard let new else { return }
+            stored = new
+            if let old, old != new, !navigating {
+                back.append(old)
+                forward.removeAll()
+            }
+            navigating = false
+        }
+    }
+
+    private func navigate(back goBack: Bool) {
+        guard let current = selection else { return }
+        if goBack, let p = back.popLast() {
+            navigating = true
+            forward.append(current)
+            selection = p
+        } else if !goBack, let p = forward.popLast() {
+            navigating = true
+            back.append(current)
+            selection = p
+        }
     }
 
     @ViewBuilder
-    private func content(_ p: Pane) -> some View {
+    private var detail: some View {
+        let pane = selection ?? stored
         if let s = core.snapshot {
-            switch p {
-            case .general: GeneralPane(s: s)
-            case .bitwarden: BitwardenPane(s: s)
-            case .browser: BrowserPane(s: s)
-            case .ssh: SSHPane(s: s)
-            case .security: SecurityPane(s: s)
+            Group {
+                switch pane {
+                case .general: GeneralPane(s: s)
+                case .bitwarden: BitwardenPane(s: s)
+                case .browser: BrowserPane(s: s)
+                case .ssh: SSHPane(s: s)
+                case .security: SecurityPane(s: s)
+                }
             }
+            .formStyle(.grouped)
+            .navigationTitle(pane.title)
+            .modifier(SystemSettingsChrome())
         } else {
             ContentUnavailableView(
                 core.startError == nil ? "Starting\u{2026}" : "Core not running",
                 systemImage: "exclamationmark.shield",
                 description: core.startError.map(Text.init)
             )
+        }
+    }
+}
+
+/// Removes the separators around the detail column so the toolbar and content read as one
+/// surface, as in System Settings: no toolbar background/baseline, a soft top scroll edge
+/// instead of a hard line, and no edge treatment next to the sidebar.
+private struct SystemSettingsChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        let base = content.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        if #available(macOS 26.0, *) {
+            base
+                .scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectHidden(true, for: [.leading, .trailing])
+        } else {
+            base
+        }
+    }
+}
+
+/// Rounded-square colored icon, as used in System Settings.
+struct IconTile: View {
+    let symbol: String
+    let tint: Color
+    var size: CGFloat = 22
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
+            .fill(tint.gradient)
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.56, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// Account row at the top of the sidebar (like the Apple Account row).
+private struct AccountRow: View {
+    let s: Snapshot
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(Color.secondary.opacity(0.25))
+                Text(initials).font(.system(size: 15, weight: .semibold))
+            }
+            .frame(width: 36, height: 36)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(s.account.loggedIn ? (s.account.email ?? "Bitwarden") : "Log In")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(s.account.loggedIn ? "Bitwarden Account" : "Not connected")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var initials: String {
+        guard s.account.loggedIn, let c = s.account.email?.first else { return "?" }
+        return String(c).uppercased()
+    }
+}
+
+/// Header card at the top of each pane (icon, title, one-line summary), as in System Settings.
+struct PaneHeader: View {
+    let pane: SettingsView.Pane
+
+    var body: some View {
+        Section {
+            VStack(spacing: 8) {
+                IconTile(symbol: pane.symbol, tint: pane.tint, size: 56)
+                Text(pane.title).font(.title2.weight(.semibold))
+                Text(pane.summary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .accessibilityElement(children: .combine)
         }
     }
 }
@@ -131,6 +318,7 @@ private struct GeneralPane: View {
 
     var body: some View {
         Form {
+            PaneHeader(pane: .general)
             Section {
                 Toggle("Launch at login", isOn: Binding(
                     get: { s.settings.launchAtLogin },
@@ -176,6 +364,7 @@ private struct BitwardenPane: View {
 
     var body: some View {
         Form {
+            PaneHeader(pane: .bitwarden)
             Section("Account") {
                 if s.account.loggedIn {
                     LabeledContent("Email", value: s.account.email ?? "\u{2014}")
@@ -251,6 +440,7 @@ private struct BrowserPane: View {
 
     var body: some View {
         Form {
+            PaneHeader(pane: .browser)
             Section {
                 Toggle("Browser biometric unlock", isOn: editor.binding(s.settings, \.browserUnlockEnabled))
                 LabeledContent("Status") {
@@ -339,6 +529,7 @@ private struct SSHPane: View {
 
     var body: some View {
         Form {
+            PaneHeader(pane: .ssh)
             Section {
                 Toggle("Enable SSH agent", isOn: editor.binding(s.settings, \.sshAgentEnabled))
                 LabeledContent("Socket path") {
@@ -460,6 +651,7 @@ private struct SecurityPane: View {
 
     var body: some View {
         Form {
+            PaneHeader(pane: .security)
             Section {
                 Picker("Authentication", selection: Binding(
                     get: { s.settings.allowPasswordFallback },

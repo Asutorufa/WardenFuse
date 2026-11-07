@@ -17,11 +17,19 @@ struct WardenFuseApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
+        // System Settings–style window (sidebar + detail), freely resizable.
+        Window("WardenFuse Settings", id: "settings") {
             SettingsView()
                 .environmentObject(core)
         }
         .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
+        .defaultSize(width: 820, height: 640)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                SettingsCommand()
+            }
+        }
 
         Window("Log In to Bitwarden", id: "login") {
             LoginView()
@@ -63,6 +71,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Stops the SSH agent, sync and browser bridge; removes sockets; drops key material.
         MainActor.assumeIsolated { CoreBridge.shared.shutdown() }
+    }
+}
+
+/// ⌘, opens the settings window.
+private struct SettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Settings\u{2026}") { openWindow(id: "settings") }
+            .keyboardShortcut(",", modifiers: .command)
     }
 }
 

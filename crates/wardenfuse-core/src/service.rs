@@ -670,6 +670,9 @@ impl Core {
         }
         self.update_usability();
         self.0.state_dirty.notify_one();
+        // A full sync parses the whole vault JSON although only SSH items are kept; give the
+        // freed heap back to the OS instead of keeping it dirty in the malloc zones.
+        release_free_memory();
         st_err.map_or(Ok(()), |e| Err(anyhow!(e)))
     }
 
@@ -1127,6 +1130,19 @@ impl Core {
             "ssh_auth_sock_env": std::env::var("SSH_AUTH_SOCK").ok(),
             "version": env!("CARGO_PKG_VERSION"),
         })
+    }
+}
+
+/// Returns free pages of all malloc zones to the OS (`malloc_zone_pressure_relief`).
+fn release_free_memory() {
+    extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut libc::c_void, goal: libc::size_t)
+            -> libc::size_t;
+    }
+    // SAFETY: a null zone means "all zones", goal 0 means "as much as possible". The call only
+    // returns unused pages and is safe to make from any thread.
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
     }
 }
 

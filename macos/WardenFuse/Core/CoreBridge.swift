@@ -90,7 +90,7 @@ final class CoreBridge: ObservableObject {
         pending.removeValue(forKey: id)?.resume(returning: obj)
     }
 
-    fileprivate func deliverState(_ json: String) {
+    func deliverState(_ json: String) {
         do {
             let s = try WireCoding.decoder.decode(Snapshot.self, from: Data(json.utf8))
             if s != snapshot { snapshot = s }

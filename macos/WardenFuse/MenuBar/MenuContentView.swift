@@ -1,14 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Holds SwiftUI's `openSettings` action, captured from the always-present menu bar label, so
-/// that AppKit code (e.g. reopening the app from Finder) can open the Settings window.
+/// Holds SwiftUI's `openWindow` action, captured from the always-present menu bar label, so
+/// that AppKit code (e.g. reopening the app from Finder) can open the settings window.
 @MainActor
 enum SettingsOpener {
-    static var action: OpenSettingsAction?
+    static var action: OpenWindowAction?
     static func open() {
         NSApp.activate()
-        action?()
+        action?(id: "settings")
     }
 }
 
@@ -48,13 +48,13 @@ struct MenuStatus {
 struct MenuBarIcon: View {
     let snapshot: Snapshot?
     let started: Bool
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let status = MenuStatus(snapshot: snapshot, started: started)
         Image(nsImage: Self.image(status.symbol))
             .accessibilityLabel("WardenFuse, \(status.title)")
-            .onAppear { SettingsOpener.action = openSettings }
+            .onAppear { SettingsOpener.action = openWindow }
     }
 
     /// Template image at a slightly larger point size than the default label rendering, matching
@@ -74,49 +74,85 @@ struct MenuBarIcon: View {
 
 // MARK: - Menu window
 
+/// Menu bar window laid out like a native status menu: app header with a pill action, a small
+/// section caption, label/value rows, a countdown bar for the SSH authorization, then plain menu
+/// items. The window background is the system's own material; only the header pill uses glass.
 struct MenuContentView: View {
     @EnvironmentObject var core: CoreBridge
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
 
     var body: some View {
+        let status = MenuStatus(snapshot: core.snapshot, started: core.started)
         VStack(alignment: .leading, spacing: 0) {
-            Header(status: MenuStatus(snapshot: core.snapshot, started: core.started))
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
+            // Header
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("WardenFuse").font(.headline)
+                    Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                PillButton(title: "Open Settings") { openSettings() }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
+            MenuDivider()
 
             if let s = core.snapshot {
-                Divider()
-                StatusRows(s: s, openLogin: openLogin)
+                Caption(text: "SSH Agent \u{00b7} \(status.title)")
+                AgentSection(s: s)
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                if let error = s.account.sessionExpired ? "Session expired. Log in again to resume sync." : (s.ssh.error ?? s.sync.error) {
+
+                if let error = s.account.sessionExpired
+                    ? "Session expired. Log in again to resume sync."
+                    : (s.ssh.error ?? s.sync.error) {
                     ErrorRow(text: error)
                         .padding(.horizontal, 14)
-                        .padding(.bottom, 10)
+                        .padding(.top, 8)
                 }
-                Divider()
-                Actions(s: s, core: core)
+
+                MenuDivider().padding(.top, 10)
+
+                Caption(text: "Bitwarden")
+                AccountSection(s: s, openLogin: openLogin)
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.bottom, 6)
+
+                MenuDivider()
+
+                VStack(spacing: 0) {
+                    if s.ssh.locked {
+                        MenuRow(title: "Unlock Agent", enabled: s.account.loggedIn && s.ssh.usable) {
+                            Task { await core.command("unlock_agent") }
+                        }
+                    } else {
+                        MenuRow(title: "Lock Agent") { Task { await core.command("lock_agent") } }
+                    }
+                    MenuRow(title: "Sync Now", enabled: s.account.loggedIn && !s.sync.syncing) {
+                        Task { await core.command("sync_now") }
+                    }
+                    MenuRow(title: "Settings\u{2026}", shortcut: ",") { openSettings() }
+                }
+                .padding(5)
             } else if let e = core.startError {
                 ErrorRow(text: e).padding(14)
             }
 
-            Divider()
-            VStack(spacing: 0) {
-                MenuRow(title: "Settings\u{2026}", symbol: "gearshape", shortcut: ",") {
-                    NSApp.activate()
-                    openSettings()
-                }
-                MenuRow(title: "Quit WardenFuse", symbol: "power", shortcut: "q") {
-                    NSApp.terminate(nil)
-                }
-            }
-            .padding(5)
+            MenuDivider()
+            MenuRow(title: "Quit WardenFuse", shortcut: "q") { NSApp.terminate(nil) }
+                .padding(5)
         }
         .frame(width: 300)
+    }
+
+    private func openSettings() {
+        NSApp.activate()
+        openWindow(id: "settings")
     }
 
     private func openLogin() {
@@ -125,67 +161,88 @@ struct MenuContentView: View {
     }
 }
 
-private struct Header: View {
-    let status: MenuStatus
-
+private struct MenuDivider: View {
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: status.symbol)
-                .font(.title2)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(status.level == .error ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("WardenFuse").font(.headline)
-                Text(status.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
+        Divider().padding(.horizontal, 14)
+    }
+}
+
+/// Small grey section caption (like a menu section header).
+private struct Caption: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Capsule action in the header (Liquid Glass on macOS 26+).
+private struct PillButton: View {
+    let title: String
+    let action: () -> Void
+    var body: some View {
+        Button(title, action: action)
+            .font(.subheadline.weight(.medium))
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+            .glassButtonStyle()
+    }
+}
+
+/// Non-interactive status capsule.
+private struct Pill: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.medium))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(.quaternary, in: Capsule())
+    }
+}
+
+private struct Row<Value: View>: View {
+    let title: String
+    @ViewBuilder var value: Value
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+            Spacer(minLength: 12)
+            value.foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
+        .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
     }
 }
 
-private struct StatusRows: View {
+private struct AgentSection: View {
     let s: Snapshot
-    let openLogin: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if s.account.loggedIn {
-                LabeledContent("Account") {
-                    Text(s.account.email ?? "\u{2014}").lineLimit(1).truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 4) {
+            Row(title: "Keys") { Text(keysText) }
+            if !s.ssh.locked, let until = s.ssh.unlockedUntilUnix,
+               until > Int64(Date().timeIntervalSince1970) {
+                let end = Date(timeIntervalSince1970: TimeInterval(until))
+                Row(title: "Authorized") {
+                    // Rendered by the system; no app timer.
+                    Text(timerInterval: Date()...end, countsDown: true).monospacedDigit()
                 }
-                LabeledContent("Server", value: host(s.account.serverUrl))
+                ProgressView(timerInterval: Date()...end, countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                    .progressViewStyle(.linear)
+                    .tint(.accentColor)
+                    .padding(.bottom, 4)
+                    .accessibilityLabel("Authorization time remaining")
             } else {
-                LabeledContent("Account") {
-                    Button("Log In\u{2026}", action: openLogin)
-                        .buttonStyle(.link)
+                Row(title: "Authorization") {
+                    Text(s.settings.sshApprovalPolicy == "every_time" ? "Every signature"
+                         : "Touch ID on next use")
                 }
-            }
-            LabeledContent("SSH agent") {
-                Text(agentText).foregroundStyle(.secondary)
-            }
-            if !s.ssh.locked, let until = s.ssh.unlockedUntilUnix, until > Int64(Date().timeIntervalSince1970) {
-                LabeledContent("Authorized for") {
-                    // Updated by the system text renderer; no app timer.
-                    Text(timerInterval: Date()...Date(timeIntervalSince1970: TimeInterval(until)), countsDown: true)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            }
-            LabeledContent("Last sync") {
-                Group {
-                    if s.sync.syncing {
-                        HStack(spacing: 4) { ProgressView().controlSize(.mini); Text("Syncing\u{2026}") }
-                    } else if let t = s.sync.lastSuccessUnix {
-                        Text(Date(timeIntervalSince1970: TimeInterval(t)), format: .relative(presentation: .named))
-                    } else {
-                        Text("Never")
-                    }
-                }
-                .foregroundStyle(.secondary)
             }
             if s.ssh.pendingKeys > 0 || (s.account.loggedIn && !s.ssh.listComplete) {
                 Text(s.ssh.pendingKeys > 0
@@ -196,18 +253,49 @@ private struct StatusRows: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.callout)
     }
 
-    private var agentText: String {
-        if !s.ssh.enabled { return "Off" }
+    private var keysText: String {
+        if !s.ssh.enabled { return "Agent off" }
         if !s.ssh.running { return "Not running" }
         if !s.account.loggedIn || !s.ssh.usable { return "Unavailable" }
-        let keys = "\(s.ssh.keys.count) key\(s.ssh.keys.count == 1 ? "" : "s")"
-        return "\(s.ssh.locked ? "Locked" : "Unlocked") \u{00b7} \(keys)"
+        let n = s.ssh.listComplete ? s.ssh.keys.count : s.ssh.vaultKeyCount
+        return "\(n) in vault"
     }
+}
 
-    private func host(_ url: String) -> String { URL(string: url)?.host ?? url }
+private struct AccountSection: View {
+    let s: Snapshot
+    let openLogin: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if s.account.loggedIn {
+                Row(title: "Account") { Text(s.account.email ?? "\u{2014}") }
+                Row(title: "Server") { Text(URL(string: s.account.serverUrl)?.host ?? s.account.serverUrl) }
+            } else {
+                HStack {
+                    Text("Not logged in")
+                    Spacer()
+                    PillButton(title: "Log In\u{2026}", action: openLogin)
+                }
+                .padding(.vertical, 3)
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text("Sync")
+                Spacer(minLength: 12)
+                if s.sync.syncing {
+                    Pill(text: "Syncing\u{2026}")
+                } else if let t = s.sync.lastSuccessUnix {
+                    Pill(text: "Updated \(Date(timeIntervalSince1970: TimeInterval(t)).formatted(.relative(presentation: .named)))")
+                } else {
+                    Pill(text: "Never synced")
+                }
+            }
+            .padding(.vertical, 3)
+            .accessibilityElement(children: .combine)
+        }
+    }
 }
 
 private struct ErrorRow: View {
@@ -223,73 +311,50 @@ private struct ErrorRow: View {
     }
 }
 
-private struct Actions: View {
-    let s: Snapshot
-    let core: CoreBridge
-
-    var body: some View {
-        GlassGroup {
-            HStack(spacing: 8) {
-                if s.ssh.locked {
-                    Button {
-                        Task { await core.command("unlock_agent") }
-                    } label: {
-                        Label("Unlock Agent", systemImage: "lock.open").frame(maxWidth: .infinity)
-                    }
-                    .glassButtonStyle(prominent: true)
-                    .disabled(!s.account.loggedIn || !s.ssh.usable)
-                } else {
-                    Button {
-                        Task { await core.command("lock_agent") }
-                    } label: {
-                        Label("Lock Agent", systemImage: "lock").frame(maxWidth: .infinity)
-                    }
-                    .glassButtonStyle()
-                }
-                Button {
-                    Task { await core.command("sync_now") }
-                } label: {
-                    Label("Sync Now", systemImage: "arrow.clockwise").frame(maxWidth: .infinity)
-                }
-                .glassButtonStyle()
-                .disabled(!s.account.loggedIn || s.sync.syncing)
-            }
-            .controlSize(.large)
-        }
-    }
-}
-
 /// A row that behaves like a native menu item: full-width hit target, accent highlight on
-/// hover, trailing key equivalent.
+/// hover, optional trailing key equivalent.
 private struct MenuRow: View {
     let title: String
-    let symbol: String
-    let shortcut: Character
+    var shortcut: Character?
+    var enabled = true
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).frame(width: 18)
+            HStack {
                 Text(title)
                 Spacer()
-                Text("\u{2318}\(String(shortcut).uppercased())")
-                    .foregroundStyle(hovering ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.tertiary))
+                if let shortcut {
+                    Text("\u{2318}\(String(shortcut).uppercased())")
+                        .foregroundStyle(hovering ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.tertiary))
+                }
             }
             .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
-            .foregroundStyle(hovering ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .foregroundStyle(hovering && enabled ? AnyShapeStyle(.white) : AnyShapeStyle(enabled ? .primary : .tertiary))
             .background {
                 // Concentric with the menu window's corner radius.
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(hovering ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear))
+                    .fill(hovering && enabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear))
             }
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
+        .disabled(!enabled)
+        .modifier(ShortcutModifier(shortcut: shortcut))
         .onHover { hovering = $0 }
+    }
+}
+
+private struct ShortcutModifier: ViewModifier {
+    let shortcut: Character?
+    func body(content: Content) -> some View {
+        if let shortcut {
+            content.keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
+        } else {
+            content
+        }
     }
 }
 
