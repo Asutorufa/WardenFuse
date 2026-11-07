@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wardenfuse-core",
+    "crates/wardenfuse-nmh",
+    "vendor/ssh_agent",
+    "vendor/secure_memory",
+]
+default-members = ["crates/wardenfuse-core", "crates/wardenfuse-nmh"]
+
+[workspace.package]
+version = "0.1.0"
+license = "GPL-3.0-only"
+edition = "2021"
+publish = false
+repository = "https://github.com/Asutorufa/wardenfuse"
+
+# Versions below mirror apps/desktop/desktop_native/Cargo.toml of bitwarden/clients@4fe208f
+# so that the vendored crates build against exactly the versions they are tested with upstream.
+[workspace.dependencies]
+aes-gcm = "=0.11.0"
+anyhow = "=1.0.103"
+async-trait = "=0.1.89"
+base64 = "=0.22.1"
+futures = "=0.3.31"
+homedir = "=0.3.6"
+libc = "=0.2.191"
+linux-keyutils = "=0.2.4"
+memsec = "=0.7.0"
+mockall = "=0.15.0"
+rand = "=0.9.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+serial_test = "=4.0.1"
+sysinfo = "=0.38.2"
+thiserror = "=2.0.17"
+tokio = "=1.53.3"
+tokio-util = "=0.7.17"
+tracing = "=0.1.44"
+windows = "=0.62.2"
+tracing-subscriber = { version = "=0.3.22", features = ["fmt", "env-filter", "tracing-log"] }
+zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
+
+# Official Bitwarden SDK crates, pinned to one sdk-internal commit.
+# Update all of them together (see docs/UPSTREAM.md).
+bitwarden-api-api = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-auth = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-core = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6", features = ["internal"] }
+bitwarden-crypto = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-ipc = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-state = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+bitwarden-sync = { git = "https://github.com/bitwarden/sdk-internal", rev = "a13b4c4e1fa3685280241f417920fd19d7ef24a6" }
+
+# Vendored from bitwarden/clients (GPL-3.0), see vendor/UPSTREAM.md
+ssh_agent = { path = "vendor/ssh_agent" }
+secure_memory = { path = "vendor/secure_memory" }
+
+[workspace.lints.clippy]
+print_stderr = "deny"
+print_stdout = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "debuginfo"
+panic = "unwind"

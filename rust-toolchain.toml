@@ -1,0 +1,7 @@
+# Pinned so local builds and CI use the same rustc/clippy (new clippy lints in later
+# toolchains fire inside the vendored upstream crates). Bump deliberately.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+profile = "minimal"
