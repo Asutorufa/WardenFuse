@@ -47,6 +47,33 @@ struct RenderPreviews {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
+    /// Shows the real settings window briefly (no Keychain access: the core is not started)
+    /// and captures it with the system compositor, so materials and Liquid Glass are real.
+    @Test func captureSettingsWindow() async throws {
+        guard let dir = ProcessInfo.processInfo.environment["WF_RENDER_DIR"] else { return }
+        CoreBridge.shared.deliverState(Self.snapshotJSON)
+        for pane in ["browser", "security"] {
+            UserDefaults.standard.set(pane, forKey: "settingsPane")
+            let wc = SettingsWindowController()
+            guard let w = wc.window else { continue }
+            NSApp.setActivationPolicy(.accessory)
+            w.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(900))
+            if pane == "security", let scroll = w.contentView?.firstScrollView() {
+                // Scroll so content sits under the toolbar to show the scroll-edge effect.
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 160))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await Task.sleep(for: .milliseconds(500))
+            }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "-o", "-l", "\(w.windowNumber)", "\(dir)/window-\(pane).png"]
+            try p.run()
+            p.waitUntilExit()
+            w.close()
+        }
+    }
+
     @Test func renderPreviews() {
         guard let dir = ProcessInfo.processInfo.environment["WF_RENDER_DIR"] else { return }
         CoreBridge.shared.deliverState(Self.snapshotJSON)
@@ -60,5 +87,13 @@ struct RenderPreviews {
                        name: "settings-\(pane)", dark: dark, dir: dir)
             }
         }
+    }
+}
+
+extension NSView {
+    func firstScrollView() -> NSScrollView? {
+        if let s = self as? NSScrollView, s.documentView != nil, s.frame.width > 300 { return s }
+        for v in subviews { if let s = v.firstScrollView() { return s } }
+        return nil
     }
 }

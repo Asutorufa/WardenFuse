@@ -94,6 +94,11 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         let contentItem = NSSplitViewItem(viewController: detail)
         contentItem.titlebarSeparatorStyle = .none
         contentItem.minimumThickness = 460
+        if #available(macOS 26.0, *) {
+            // Content extends under the sidebar and the toolbar (safe-area insets keep it
+            // readable): no seam next to the sidebar.
+            contentItem.automaticallyAdjustsSafeAreaInsets = true
+        }
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(contentItem)
 
@@ -103,6 +108,9 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         w.titleVisibility = .hidden
         w.titlebarSeparatorStyle = .none
         w.toolbarStyle = .unified
+        // No titlebar/toolbar background of its own: at rest the toolbar sits on the content
+        // surface; when content scrolls under it the system draws its scroll-edge effect.
+        w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.setContentSize(NSSize(width: 880, height: 660))
         w.contentMinSize = NSSize(width: 740, height: 480)
@@ -150,6 +158,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
             let group = NSToolbarItemGroup(itemIdentifier: id, images: images, selectionMode: .momentary,
                                            labels: ["Back", "Forward"], target: self, action: #selector(navigate(_:)))
             group.controlRepresentation = .expanded
+            group.isBordered = true
             group.subitems.first?.isEnabled = nav.canGoBack
             group.subitems.last?.isEnabled = nav.canGoForward
             navGroup = group

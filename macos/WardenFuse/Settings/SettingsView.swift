@@ -140,6 +140,7 @@ struct SettingsSidebar: View {
 struct SettingsDetail: View {
     @EnvironmentObject var core: CoreBridge
     @ObservedObject var nav: SettingsNavigation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let s = core.snapshot {
@@ -157,6 +158,10 @@ struct SettingsDetail: View {
             // toolbar band and the content are one surface.
             .scrollContentBackground(.hidden)
             .modifier(SystemSettingsChrome())
+            // Pane switches cross-fade like System Settings (instant with Reduce Motion).
+            .id(nav.selection)
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: nav.selection)
         } else {
             ContentUnavailableView(
                 core.startError == nil ? "Starting\u{2026}" : "Core not running",

@@ -26,15 +26,15 @@ func draw(_ ctx: CGContext, size s: CGFloat) {
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 28, color: rgb(0, 0, 0, 0.32))
     ctx.addPath(squircle)
-    ctx.setFillColor(rgb(40, 44, 52))
+    ctx.setFillColor(rgb(16, 64, 160))
     ctx.fillPath()
     ctx.restoreGState()
 
-    // Background gradient: graphite to muted slate (low saturation).
+    // Background gradient: Bitwarden-like blue.
     ctx.saveGState()
     ctx.addPath(squircle)
     ctx.clip()
-    let bg = CGGradient(colorsSpace: space, colors: [rgb(78, 92, 110), rgb(33, 38, 47)] as CFArray, locations: [0, 1])!
+    let bg = CGGradient(colorsSpace: space, colors: [rgb(41, 121, 255), rgb(19, 72, 186)] as CFArray, locations: [0, 1])!
     ctx.drawLinearGradient(bg, start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
     // Soft top highlight (glass-like rim light).
     let hl = CGGradient(colorsSpace: space, colors: [rgb(255, 255, 255, 0.18), rgb(255, 255, 255, 0)] as CFArray, locations: [0, 1])!
@@ -75,7 +75,7 @@ func draw(_ ctx: CGContext, size s: CGFloat) {
     ctx.drawLinearGradient(sg, start: CGPoint(x: 512, y: top), end: CGPoint(x: 512, y: bottom), options: [])
     ctx.restoreGState()
 
-    // Keyhole (accent: muted teal).
+    // Keyhole in the background blue.
     let keyhole = CGMutablePath()
     keyhole.addEllipse(in: CGRect(x: cx - 58, y: 520, width: 116, height: 116))
     keyhole.move(to: CGPoint(x: cx - 30, y: 540))
@@ -84,7 +84,7 @@ func draw(_ ctx: CGContext, size s: CGFloat) {
     keyhole.addLine(to: CGPoint(x: cx + 30, y: 540))
     keyhole.closeSubpath()
     ctx.addPath(keyhole)
-    ctx.setFillColor(rgb(46, 112, 120))
+    ctx.setFillColor(rgb(23, 93, 220))
     ctx.fillPath()
 }
 

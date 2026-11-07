@@ -307,6 +307,7 @@ struct Pill: View {
     let text: String
     var body: some View {
         Text(text)
+            .contentTransition(.opacity)
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
@@ -322,6 +323,7 @@ struct InfoRow<Value: View>: View {
             Text(title)
             Spacer(minLength: 12)
             value.foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                .contentTransition(.numericText())
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
