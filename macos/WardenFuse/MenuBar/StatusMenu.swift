@@ -7,41 +7,130 @@ import SwiftUI
 /// Derived, display-only status. All decisions are made by the Rust core.
 struct MenuStatus {
     enum Level { case ok, locked, idle, busy, error }
-    let symbol: String
+    /// Menu bar glyph: the app icon's shield with a cut-out mark.
+    enum Glyph: Hashable { case unlocked, locked, off, error }
+
+    let glyph: Glyph
     let title: String
     let level: Level
 
     init(snapshot s: Snapshot?, started: Bool) {
-        guard started, let s else {
-            self.init("exclamationmark.shield", "Not running", .error); return
-        }
-        if !s.account.loggedIn { self.init("shield.slash", "Not logged in", .idle); return }
-        if s.account.sessionExpired { self.init("exclamationmark.shield", "Session expired", .error); return }
-        if s.ssh.error != nil || s.sync.error != nil {
-            self.init("exclamationmark.shield", "Needs attention", .error); return
-        }
-        if s.sync.syncing { self.init("arrow.triangle.2.circlepath", "Syncing", .busy); return }
-        if !s.ssh.enabled { self.init("shield", "Agent off", .idle); return }
-        if s.ssh.locked { self.init("lock.shield", "Locked", .locked); return }
-        self.init("checkmark.shield", "Unlocked", .ok)
+        guard started, let s else { self.init(.error, "Not running", .error); return }
+        if !s.account.loggedIn { self.init(.off, "Not logged in", .idle); return }
+        if s.account.sessionExpired { self.init(.error, "Session expired", .error); return }
+        if s.ssh.error != nil || s.sync.error != nil { self.init(.error, "Needs attention", .error); return }
+        if !s.ssh.enabled { self.init(.off, "Agent off", .idle); return }
+        // Syncing changes only the title, not the glyph, so the icon does not flicker.
+        let glyph: Glyph = s.ssh.locked ? .locked : .unlocked
+        if s.sync.syncing { self.init(glyph, "Syncing", .busy); return }
+        self.init(glyph, s.ssh.locked ? "Locked" : "Unlocked", s.ssh.locked ? .locked : .ok)
     }
 
-    private init(_ symbol: String, _ title: String, _ level: Level) {
-        self.symbol = symbol
+    private init(_ glyph: Glyph, _ title: String, _ level: Level) {
+        self.glyph = glyph
         self.title = title
         self.level = level
     }
 
-    /// Template image slightly larger than the default status item rendering.
-    @MainActor private static var cache: [String: NSImage] = [:]
-    @MainActor static func image(_ name: String) -> NSImage {
-        if let i = cache[name] { return i }
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) ?? NSImage()
+    /// Vector template image (tinted by the system like any status item, crisp at every scale).
+    @MainActor private static var cache: [Glyph: NSImage] = [:]
+    @MainActor static func image(_ glyph: Glyph) -> NSImage {
+        if let i = cache[glyph] { return i }
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            StatusGlyph.draw(glyph)
+            return true
+        }
         img.isTemplate = true
-        cache[name] = img
+        cache[glyph] = img
         return img
+    }
+}
+
+/// Draws the menu bar glyph in an 18×18 pt box (shield geometry taken from the app icon).
+enum StatusGlyph {
+    /// App-icon coordinates (1024 canvas) mapped into the 18 pt box.
+    private static let k: CGFloat = 15.6 / 562
+    private static func p(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+        NSPoint(x: 9 + (x - 512) * k, y: 1.2 + (y - 228) * k)
+    }
+
+    static func shield() -> NSBezierPath {
+        let path = NSBezierPath()
+        let top: CGFloat = 790, bottom: CGFloat = 228, cx: CGFloat = 512, half: CGFloat = 228
+        path.move(to: p(cx, top))
+        path.curve(to: p(cx + half, top - 70), controlPoint1: p(cx + 90, top - 40), controlPoint2: p(cx + 170, top - 60))
+        path.curve(to: p(cx, bottom), controlPoint1: p(cx + half + 6, 470), controlPoint2: p(cx + 140, 300))
+        path.curve(to: p(cx - half, top - 70), controlPoint1: p(cx - 140, 300), controlPoint2: p(cx - half - 6, 470))
+        path.curve(to: p(cx, top), controlPoint1: p(cx - 170, top - 60), controlPoint2: p(cx - 90, top - 40))
+        path.close()
+        return path
+    }
+
+    private static func keyhole() -> NSBezierPath {
+        let path = NSBezierPath(ovalIn: NSRect(x: 9 - 1.9, y: 9.6, width: 3.8, height: 3.8))
+        let stem = NSBezierPath()
+        stem.move(to: NSPoint(x: 9 - 0.9, y: 10.2))
+        stem.line(to: NSPoint(x: 9 - 1.4, y: 5.4))
+        stem.line(to: NSPoint(x: 9 + 1.4, y: 5.4))
+        stem.line(to: NSPoint(x: 9 + 0.9, y: 10.2))
+        stem.close()
+        path.append(stem)
+        return path
+    }
+
+    private static func padlock() -> NSBezierPath {
+        let body = NSBezierPath(roundedRect: NSRect(x: 9 - 2.9, y: 5.2, width: 5.8, height: 4.6), xRadius: 1, yRadius: 1)
+        let shackle = NSBezierPath()
+        shackle.move(to: NSPoint(x: 9 - 1.8, y: 9.6))
+        shackle.line(to: NSPoint(x: 9 - 1.8, y: 11.1))
+        shackle.appendArc(withCenter: NSPoint(x: 9, y: 11.1), radius: 1.8, startAngle: 180, endAngle: 0, clockwise: true)
+        shackle.line(to: NSPoint(x: 9 + 1.8, y: 9.6))
+        let outline = shackle.copy() as! NSBezierPath
+        outline.lineWidth = 1.2
+        return body.appendingStroke(outline)
+    }
+
+    private static func exclamation() -> NSBezierPath {
+        let path = NSBezierPath(roundedRect: NSRect(x: 9 - 0.85, y: 8.0, width: 1.7, height: 5.6), xRadius: 0.85, yRadius: 0.85)
+        path.append(NSBezierPath(ovalIn: NSRect(x: 9 - 1, y: 4.9, width: 2, height: 2)))
+        return path
+    }
+
+    static func draw(_ glyph: MenuStatus.Glyph) {
+        NSColor.black.setFill()
+        NSColor.black.setStroke()
+        let shield = shield()
+        guard glyph != .off else {
+            // Outline only: logged out / agent off.
+            let scaled = shield.copy() as! NSBezierPath
+            var t = AffineTransform(translationByX: -9, byY: -9)
+            t.append(AffineTransform(scale: 0.9))
+            t.append(AffineTransform(translationByX: 9, byY: 9))
+            scaled.transform(using: t)
+            scaled.lineWidth = 1.5
+            scaled.lineJoinStyle = .round
+            scaled.stroke()
+            return
+        }
+        shield.fill()
+        let mark: NSBezierPath = switch glyph {
+        case .unlocked: keyhole()
+        case .locked: padlock()
+        case .error: exclamation()
+        case .off: NSBezierPath()
+        }
+        NSGraphicsContext.current?.compositingOperation = .destinationOut
+        mark.fill()
+        NSGraphicsContext.current?.compositingOperation = .sourceOver
+    }
+}
+
+private extension NSBezierPath {
+    /// The stroke outline of `other` added as a fillable area (for knock-outs).
+    func appendingStroke(_ other: NSBezierPath) -> NSBezierPath {
+        let cg = other.cgPath.copy(strokingWithWidth: other.lineWidth, lineCap: .round, lineJoin: .round, miterLimit: 10)
+        append(NSBezierPath(cgPath: cg))
+        return self
     }
 }
 
@@ -89,7 +178,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func updateIcon() {
         let status = MenuStatus(snapshot: CoreBridge.shared.snapshot, started: CoreBridge.shared.started)
-        item?.button?.image = MenuStatus.image(status.symbol)
+        item?.button?.image = MenuStatus.image(status.glyph)
         item?.button?.setAccessibilityLabel("WardenFuse, \(status.title)")
     }
 

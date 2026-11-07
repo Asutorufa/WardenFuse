@@ -74,6 +74,36 @@ struct RenderPreviews {
         }
     }
 
+    /// Menu bar glyphs at 2x on light and dark bars, tinted like the system does.
+    @Test func renderGlyphs() {
+        guard let dir = ProcessInfo.processInfo.environment["WF_RENDER_DIR"] else { return }
+        let glyphs: [MenuStatus.Glyph] = [.unlocked, .locked, .off, .error]
+        let scale: CGFloat = 4, cell: CGFloat = 30
+        let size = NSSize(width: cell * CGFloat(glyphs.count) * scale, height: cell * 2 * scale)
+        let image = NSImage(size: size, flipped: false) { _ in
+            for (row, (bg, fg)) in [(NSColor(white: 0.93, alpha: 1), NSColor.black),
+                                    (NSColor(white: 0.16, alpha: 1), NSColor.white)].enumerated() {
+                bg.setFill()
+                NSRect(x: 0, y: CGFloat(1 - row) * cell * scale, width: size.width, height: cell * scale).fill()
+                for (i, g) in glyphs.enumerated() {
+                    let tinted = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { r in
+                        MenuStatus.image(g).draw(in: r)
+                        fg.set()
+                        r.fill(using: .sourceAtop)
+                        return true
+                    }
+                    let x = (CGFloat(i) * cell + 6) * scale
+                    let y = (CGFloat(1 - row) * cell + 6) * scale
+                    tinted.draw(in: NSRect(x: x, y: y, width: 18 * scale, height: 18 * scale))
+                }
+            }
+            return true
+        }
+        if let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/glyphs.png"))
+        }
+    }
+
     @Test func renderPreviews() {
         guard let dir = ProcessInfo.processInfo.environment["WF_RENDER_DIR"] else { return }
         CoreBridge.shared.deliverState(Self.snapshotJSON)
