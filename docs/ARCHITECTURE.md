@@ -151,8 +151,8 @@ backgrounds of its own.
 
 | Surface | Implementation | Liquid Glass |
 |---|---|---|
-| Menu bar | `MenuBarExtra(.window)`: header, label/value status rows, one action group, menu-style Settings/Quit rows with key equivalents | Window drawn by the system; only the Lock/Unlock + Sync buttons use `.glass`/`.glassProminent` inside one `GlassEffectContainer` |
-| Settings | `Settings` scene, toolbar `TabView`, grouped `Form` + `LabeledContent`/`Picker`/`Toggle`, resizable (`.contentMinSize`) | Toolbar and controls are rendered by the system |
+| Menu bar | `MenuBarExtra(.window)` laid out like a native status menu: app/version header, grey section captions, label/value rows, TTL countdown bar (`ProgressView(timerInterval:)`), sync pill, plain menu rows with hover highlight and key equivalents | Window drawn by the system; only the header pill button uses `.glass` (capsule) |
+| Settings | Resizable `Window` scene modelled on System Settings: `NavigationSplitView` with sidebar search, account row, colored icon tiles, back/forward; header card + grouped `Form` per pane. Toolbar background and scroll-edge separators are hidden so toolbar and content form one surface | Sidebar, toolbar and controls are rendered by the system |
 | Login | `Window` with grouped `Form`, `@FocusState` field order, Return to submit, Esc to cancel | Footer buttons `.glass`/`.glassProminent` |
 | Authentication | system LocalAuthentication dialog only | — |
 
