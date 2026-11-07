@@ -1,0 +1,49 @@
+[package]
+name = "wardenfuse-core"
+description = "WardenFuse core: Bitwarden login/sync, SSH agent, auth TTL and browser bridge"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+# staticlib: linked into the SwiftUI app. rlib: used by tests and the NMH binary.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bitwarden-api-api = { workspace = true }
+bitwarden-auth = { workspace = true }
+bitwarden-core = { workspace = true }
+bitwarden-crypto = { workspace = true }
+# `test-support` only re-exports the Noise crypto provider and the CommunicationBackend traits
+# (no behavioural change); they are required to host an IPC endpoint outside of WASM.
+bitwarden-ipc = { workspace = true, features = ["test-support"] }
+bitwarden-state = { workspace = true }
+bitwarden-sync = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+futures = { workspace = true }
+libc = { workspace = true }
+secure_memory = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "=0.10.9"
+ssh_agent = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+bitwarden-crypto = { workspace = true }
+ssh-key = { version = "=0.6.7", features = ["ed25519", "rand_core"] }
+tempfile = "3"
+
+[lints]
+workspace = true

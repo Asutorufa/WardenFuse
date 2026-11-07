@@ -1,0 +1,5 @@
+module CWardenFuseCore {
+    header "../../../crates/wardenfuse-core/include/wardenfuse.h"
+    link "wardenfuse_core"
+    export *
+}

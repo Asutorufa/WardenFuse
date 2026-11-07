@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format (WardenFuse crates; vendored crates keep upstream formatting)
+        run: cargo fmt -p wardenfuse-core -p wardenfuse-nmh --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test (no Bitwarden account needed; uses system OpenSSH tools)
+        run: cargo test --workspace --locked
+      - name: Release build
+        run: cargo build --release --locked
+
+  app:
+    runs-on: macos-15
+    needs: rust
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build WardenFuse.app (ad-hoc signed) and DMG
+        env:
+          DMG: "1"
+        run: scripts/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WardenFuse-unsigned
+          path: dist/WardenFuse.dmg
+
+  # Developer ID signing + notarization; runs only when the secrets are configured.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    needs: app
+    env:
+      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Import signing certificate
+        if: env.HAS_CERT == 'true'
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
+      - name: Build, sign, notarize
+        if: env.HAS_CERT == 'true'
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          DMG: "1"
+        run: |
+          scripts/build-app.sh
+          xcrun notarytool store-credentials wardenfuse --apple-id "${{ secrets.NOTARY_APPLE_ID }}" \
+            --team-id "$TEAM_ID" --password "${{ secrets.NOTARY_PASSWORD }}"
+          scripts/notarize.sh dist/WardenFuse.dmg
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_CERT == 'true'
+        with:
+          name: WardenFuse
+          path: dist/WardenFuse.dmg
