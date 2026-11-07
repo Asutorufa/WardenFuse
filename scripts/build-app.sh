@@ -17,7 +17,10 @@ BUILD="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 DIST="$ROOT/dist"
 APP="$DIST/WardenFuse.app"
 
-export MACOSX_DEPLOYMENT_TARGET=15.0
+# Minimum macOS for the Rust objects only. It must NOT be exported to `swift build`: there it
+# also ends up as the SDK version recorded in the app binary (LC_BUILD_VERSION sdk 15.0), and
+# macOS then draws the app in the pre–Liquid Glass compatibility style.
+RUST_MIN_MACOS=15.0
 UNI="target/universal-apple-darwin/release"
 mkdir -p "$UNI"
 LIBS=(); NMHS=(); SWIFT_ARCHS=()
@@ -28,7 +31,8 @@ for arch in $ARCHS; do
     *) echo "unknown arch $arch" >&2; exit 1 ;;
   esac
   echo "==> Rust core + native messaging host ($t)"
-  cargo build --release --locked --target "$t" -p wardenfuse-core -p wardenfuse-nmh
+  MACOSX_DEPLOYMENT_TARGET="$RUST_MIN_MACOS" \
+    cargo build --release --locked --target "$t" -p wardenfuse-core -p wardenfuse-nmh
   LIBS+=("target/$t/release/libwardenfuse_core.a")
   NMHS+=("target/$t/release/wardenfuse-nmh")
   SWIFT_ARCHS+=(--arch "$arch")
@@ -53,6 +57,16 @@ fi
 cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 cp NOTICE.md "$APP/Contents/Resources/NOTICE.md"
 strip -x "$APP/Contents/MacOS/WardenFuse" "$APP/Contents/MacOS/wardenfuse-nmh" 2>/dev/null || true
+
+# SwiftPM's build system links the app with the package's minimum OS as the recorded *SDK*
+# version (LC_BUILD_VERSION sdk 15.0) although it compiles against the current SDK. macOS uses
+# that value to decide the app's design generation, so an "SDK 15" app is drawn without Liquid
+# Glass. Record the SDK the app was actually built with (minimum OS stays 15.0).
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+for arch in $ARCHS; do
+  vtool -arch "$arch" -set-build-version macos "$RUST_MIN_MACOS" "$SDK_VERSION" -replace \
+    -output "$APP/Contents/MacOS/WardenFuse" "$APP/Contents/MacOS/WardenFuse"
+done
 
 echo "==> Signing"
 if [ -n "${SIGN_IDENTITY:-}" ]; then
@@ -86,4 +100,8 @@ if [ "${DMG:-0}" = "1" ]; then
 fi
 
 lipo -info "$APP/Contents/MacOS/WardenFuse" "$APP/Contents/MacOS/wardenfuse-nmh"
+# The app must record the real SDK (macOS 26+) or it is drawn without Liquid Glass.
+SDKV="$(vtool -arch arm64 -show-build "$APP/Contents/MacOS/WardenFuse" | awk '/ sdk /{print $2; exit}')"
+echo "==> Linked SDK: $SDKV (minimum macOS $(vtool -arch arm64 -show-build "$APP/Contents/MacOS/WardenFuse" | awk '/minos/{print $2; exit}'))"
+case "$SDKV" in 1[0-9].*|2[0-5].*) echo "error: app records SDK $SDKV; Liquid Glass needs 26+" >&2; exit 1 ;; esac
 du -sh "$APP" | awk '{print "==> Done: " $2 " (" $1 ")"}'
