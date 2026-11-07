@@ -51,11 +51,13 @@ struct RenderPreviews {
         guard let dir = ProcessInfo.processInfo.environment["WF_RENDER_DIR"] else { return }
         CoreBridge.shared.deliverState(Self.snapshotJSON)
         for dark in [false, true] {
-            render(MenuContentView().background(.regularMaterial), size: CGSize(width: 300, height: 0),
-                   name: "menu", dark: dark, dir: dir)
+            render(VStack(spacing: 8) { MenuHeaderView(onOpenSettings: {}); AgentInfoView(); AccountInfoView(onLogin: {}) }
+                       .frame(width: 300).padding(.vertical, 8).background(.regularMaterial),
+                   size: CGSize(width: 300, height: 0), name: "menu", dark: dark, dir: dir)
             for pane in ["general", "ssh", "security"] {
                 UserDefaults.standard.set(pane, forKey: "settingsPane")
-                render(SettingsView(), size: CGSize(width: 780, height: 620), name: "settings-\(pane)", dark: dark, dir: dir)
+                render(SettingsDetail(nav: SettingsNavigation()), size: CGSize(width: 600, height: 620),
+                       name: "settings-\(pane)", dark: dark, dir: dir)
             }
         }
     }

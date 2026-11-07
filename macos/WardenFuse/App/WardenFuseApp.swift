@@ -5,38 +5,17 @@ import SwiftUI
 @main
 struct WardenFuseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var core = CoreBridge.shared
-    @AppStorage("showMenuBarIcon") private var showIcon = true
-
     var body: some Scene {
-        MenuBarExtra(isInserted: $showIcon) {
-            MenuContentView()
-                .environmentObject(core)
-        } label: {
-            MenuBarIcon(snapshot: core.snapshot, started: core.started)
-        }
-        .menuBarExtraStyle(.window)
-
-        // System Settings–style window (sidebar + detail), freely resizable.
-        Window("WardenFuse Settings", id: "settings") {
-            SettingsView()
-                .environmentObject(core)
-        }
-        .windowResizability(.contentMinSize)
-        .windowToolbarStyle(.unified)
-        .defaultSize(width: 820, height: 640)
-        .commands {
-            CommandGroup(replacing: .appSettings) {
-                SettingsCommand()
+        // The status item, Settings and Login windows are AppKit-managed (see
+        // StatusMenuController / WindowManager) so the menu is a real NSMenu. SwiftUI still needs
+        // a scene; this one only rebinds ⌘, to the settings window.
+        Settings { EmptyView() }
+            .commands {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings\u{2026}") { WindowManager.shared.showSettings() }
+                        .keyboardShortcut(",", modifiers: .command)
+                }
             }
-        }
-
-        Window("Log In to Bitwarden", id: "login") {
-            LoginView()
-                .environmentObject(core)
-        }
-        .windowResizability(.contentMinSize)
-        .defaultPosition(.center)
     }
 }
 
@@ -51,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.disableSuddenTermination()
         Task { @MainActor in
             CoreBridge.shared.start()
+            StatusMenuController.shared.start()
             events.start()
             LoginItem.reconcile()
         }
@@ -64,22 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         // Launched again from Finder (e.g. while the icon is hidden): show the icon and Settings.
         UserDefaults.standard.set(true, forKey: "showMenuBarIcon")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { SettingsOpener.open() }
+        WindowManager.shared.showSettings()
         return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Stops the SSH agent, sync and browser bridge; removes sockets; drops key material.
         MainActor.assumeIsolated { CoreBridge.shared.shutdown() }
-    }
-}
-
-/// ⌘, opens the settings window.
-private struct SettingsCommand: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Button("Settings\u{2026}") { openWindow(id: "settings") }
-            .keyboardShortcut(",", modifiers: .command)
     }
 }
 

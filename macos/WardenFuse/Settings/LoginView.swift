@@ -4,7 +4,6 @@ import SwiftUI
 /// password is passed to the core once and never stored; the core runs the official SDK login.
 struct LoginView: View {
     @EnvironmentObject var core: CoreBridge
-    @Environment(\.dismissWindow) private var dismissWindow
 
     enum Method: String, CaseIterable, Identifiable {
         case password = "Master Password"
@@ -154,7 +153,7 @@ struct LoginView: View {
             Spacer()
             GlassGroup {
                 HStack(spacing: 10) {
-                    Button("Cancel") { dismissWindow(id: "login") }
+                    Button("Cancel") { WindowManager.shared.closeLogin() }
                         .keyboardShortcut(.cancelAction)
                         .glassButtonStyle()
                     Button(inTwoFactor ? "Verify" : "Log In") { Task { await submit(sendEmail: false) } }
@@ -197,7 +196,7 @@ struct LoginView: View {
         let r = await core.command(cmd, args)
         if r["ok"] as? Bool == true {
             password = ""; clientSecret = ""; code = ""
-            dismissWindow(id: "login")
+            WindowManager.shared.closeLogin()
             return
         }
         if let tf = r["two_factor"] as? [String] {

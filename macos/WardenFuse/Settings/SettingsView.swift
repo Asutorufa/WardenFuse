@@ -1,19 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Settings window modelled on macOS System Settings: a full-height sidebar with search,
-/// colored icon tiles and the account at the top; each pane starts with a header card followed
-/// by grouped forms. Hosted in a regular resizable `Window` scene. Every change is submitted to
-/// the core, which validates and applies it; the form always reflects what the core reports.
-struct SettingsView: View {
-    @EnvironmentObject var core: CoreBridge
-    @AppStorage("settingsPane") private var stored: Pane = .general
-    @State private var selection: Pane?
-    @State private var back: [Pane] = []
-    @State private var forward: [Pane] = []
-    @State private var navigating = false
-    @State private var query = ""
-
+/// Settings panes and navigation state. The window itself (sidebar + detail, toolbar) is built
+/// with AppKit split-view primitives in `SettingsWindowController`, like System Settings.
+enum SettingsView {
     enum Pane: String, CaseIterable, Identifiable, Hashable {
         case general, bitwarden, browser, ssh, security
         var id: String { rawValue }
@@ -63,23 +53,74 @@ struct SettingsView: View {
             }
         }
     }
+}
 
-    private var visiblePanes: [Pane] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return Pane.allCases }
-        return Pane.allCases.filter { "\($0.title) \($0.keywords)".lowercased().contains(q) }
+/// Selection with back/forward history, shared by the sidebar, the detail and the toolbar.
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    @Published private(set) var selection: SettingsView.Pane
+    @Published private(set) var canGoBack = false
+    @Published private(set) var canGoForward = false
+    @Published var query = ""
+    private var back: [SettingsView.Pane] = []
+    private var forward: [SettingsView.Pane] = []
+
+    init() {
+        let stored = UserDefaults.standard.string(forKey: "settingsPane")
+        selection = stored.flatMap(SettingsView.Pane.init(rawValue:)) ?? .general
     }
 
+    var visiblePanes: [SettingsView.Pane] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return SettingsView.Pane.allCases }
+        return SettingsView.Pane.allCases.filter { "\($0.title) \($0.keywords)".lowercased().contains(q) }
+    }
+
+    func select(_ p: SettingsView.Pane) {
+        guard p != selection else { return }
+        back.append(selection)
+        forward.removeAll()
+        set(p)
+    }
+
+    func goBack() {
+        guard let p = back.popLast() else { return }
+        forward.append(selection)
+        set(p)
+    }
+
+    func goForward() {
+        guard let p = forward.popLast() else { return }
+        back.append(selection)
+        set(p)
+    }
+
+    private func set(_ p: SettingsView.Pane) {
+        selection = p
+        canGoBack = !back.isEmpty
+        canGoForward = !forward.isEmpty
+        UserDefaults.standard.set(p.rawValue, forKey: "settingsPane")
+    }
+}
+
+/// Sidebar: search field, account row, colored icon tiles (System Settings layout).
+struct SettingsSidebar: View {
+    @EnvironmentObject var core: CoreBridge
+    @ObservedObject var nav: SettingsNavigation
+
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                if query.isEmpty, let s = core.snapshot {
+        VStack(spacing: 0) {
+            SearchField(text: $nav.query, prompt: "Search")
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            List(selection: Binding(get: { nav.selection }, set: { if let p = $0 { nav.select(p) } })) {
+                if nav.query.isEmpty, let s = core.snapshot {
                     AccountRow(s: s)
                         .padding(.vertical, 4)
-                        .tag(Pane.bitwarden)
+                        .tag(SettingsView.Pane.bitwarden)
                 }
                 Section {
-                    ForEach(visiblePanes) { p in
+                    ForEach(nav.visiblePanes) { p in
                         Label {
                             Text(p.title)
                         } icon: {
@@ -90,60 +131,20 @@ struct SettingsView: View {
                 }
             }
             .listStyle(.sidebar)
-            .searchable(text: $query, placement: .sidebar, prompt: "Search")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
-            .toolbar(removing: .sidebarToggle)
-        } detail: {
-            detail
-                .toolbar {
-                    ToolbarItem(placement: .navigation) {
-                        ControlGroup {
-                            Button { navigate(back: true) } label: { Image(systemName: "chevron.left") }
-                                .disabled(back.isEmpty)
-                                .help("Back")
-                                .accessibilityLabel("Back")
-                            Button { navigate(back: false) } label: { Image(systemName: "chevron.right") }
-                                .disabled(forward.isEmpty)
-                                .help("Forward")
-                                .accessibilityLabel("Forward")
-                        }
-                    }
-                }
-        }
-        .toolbar(removing: .title)
-        .frame(minWidth: 720, idealWidth: 820, maxWidth: .infinity,
-               minHeight: 480, idealHeight: 620, maxHeight: .infinity)
-        .onAppear { if selection == nil { selection = stored } }
-        .onChange(of: selection) { old, new in
-            guard let new else { return }
-            stored = new
-            if let old, old != new, !navigating {
-                back.append(old)
-                forward.removeAll()
-            }
-            navigating = false
+            .scrollContentBackground(.hidden)
         }
     }
+}
 
-    private func navigate(back goBack: Bool) {
-        guard let current = selection else { return }
-        if goBack, let p = back.popLast() {
-            navigating = true
-            forward.append(current)
-            selection = p
-        } else if !goBack, let p = forward.popLast() {
-            navigating = true
-            back.append(current)
-            selection = p
-        }
-    }
+/// The selected pane.
+struct SettingsDetail: View {
+    @EnvironmentObject var core: CoreBridge
+    @ObservedObject var nav: SettingsNavigation
 
-    @ViewBuilder
-    private var detail: some View {
-        let pane = selection ?? stored
+    var body: some View {
         if let s = core.snapshot {
             Group {
-                switch pane {
+                switch nav.selection {
                 case .general: GeneralPane(s: s)
                 case .bitwarden: BitwardenPane(s: s)
                 case .browser: BrowserPane(s: s)
@@ -152,7 +153,9 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle(pane.title)
+            // Window background behind the grouped cards, as in System Settings, so the
+            // toolbar band and the content are one surface.
+            .scrollContentBackground(.hidden)
             .modifier(SystemSettingsChrome())
         } else {
             ContentUnavailableView(
@@ -164,18 +167,42 @@ struct SettingsView: View {
     }
 }
 
-/// Removes the separators around the detail column so the toolbar and content read as one
-/// surface, as in System Settings: no toolbar background/baseline, a soft top scroll edge
-/// instead of a hard line, and no edge treatment next to the sidebar.
+/// Native `NSSearchField` (capsule, Liquid Glass on macOS 26+), as in System Settings.
+struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let f = NSSearchField()
+        f.placeholderString = prompt
+        f.delegate = context.coordinator
+        f.controlSize = .large
+        f.sendsSearchStringImmediately = true
+        return f
+    }
+
+    func updateNSView(_ f: NSSearchField, context: Context) {
+        if f.stringValue != text { f.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ n: Notification) {
+            if let f = n.object as? NSSearchField { text.wrappedValue = f.stringValue }
+        }
+    }
+}
+
+/// Content scrolls under the toolbar with the soft (blurred) edge effect, as in System Settings.
 private struct SystemSettingsChrome: ViewModifier {
     func body(content: Content) -> some View {
-        let base = content.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         if #available(macOS 26.0, *) {
-            base
-                .scrollEdgeEffectStyle(.soft, for: .top)
-                .scrollEdgeEffectHidden(true, for: [.leading, .trailing])
+            content.scrollEdgeEffectStyle(.soft, for: .top)
         } else {
-            base
+            content
         }
     }
 }
@@ -359,7 +386,6 @@ private struct GeneralPane: View {
 private struct BitwardenPane: View {
     let s: Snapshot
     @StateObject private var editor = SettingsEditor()
-    @Environment(\.openWindow) private var openWindow
     @State private var confirmLogout = false
 
     var body: some View {
@@ -375,13 +401,13 @@ private struct BitwardenPane: View {
                     }
                     HStack {
                         Spacer()
-                        Button("Log In Again\u{2026}") { openWindow(id: "login") }
+                        Button("Log In Again\u{2026}") { WindowManager.shared.showLogin() }
                         Button("Log Out\u{2026}", role: .destructive) { confirmLogout = true }
                     }
                 } else {
                     LabeledContent("Server URL", value: s.settings.serverUrl)
                     LabeledContent("Status") {
-                        Button("Log In\u{2026}") { openWindow(id: "login") }
+                        Button("Log In\u{2026}") { WindowManager.shared.showLogin() }
                     }
                 }
             }

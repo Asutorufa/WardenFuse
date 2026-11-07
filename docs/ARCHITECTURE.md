@@ -151,9 +151,9 @@ backgrounds of its own.
 
 | Surface | Implementation | Liquid Glass |
 |---|---|---|
-| Menu bar | `MenuBarExtra(.window)` laid out like a native status menu: app/version header, grey section captions, label/value rows, TTL countdown bar (`ProgressView(timerInterval:)`), sync pill, plain menu rows with hover highlight and key equivalents | Window drawn by the system; only the header pill button uses `.glass` (capsule) |
-| Settings | Resizable `Window` scene modelled on System Settings: `NavigationSplitView` with sidebar search, account row, colored icon tiles, back/forward; header card + grouped `Form` per pane. Toolbar background and scroll-edge separators are hidden so toolbar and content form one surface | Sidebar, toolbar and controls are rendered by the system |
-| Login | `Window` with grouped `Form`, `@FocusState` field order, Return to submit, Esc to cancel | Footer buttons `.glass`/`.glassProminent` |
+| Menu bar | Real `NSMenu` on an `NSStatusItem` (system material, radius, highlight, key equivalents): native section headers and action items (Lock/Unlock, Sync Now, Settings… ⌘,, Quit ⌘Q); only the info rows (header, values, TTL countdown bar, sync pill) are embedded SwiftUI views, created when the menu opens and released when it closes | Drawn by the system; the header pill button uses `.glass` (capsule) |
+| Settings | AppKit window like System Settings: `NSSplitViewController` with a sidebar item (no divider), content item without titlebar separator, `NSSearchField`, account row, colored icon tiles, back/forward toolbar group with pane title; SwiftUI header card + grouped `Form` per pane on the window background. Released on close | Sidebar, toolbar, search field and controls are rendered by the system |
+| Login | AppKit-managed window with grouped `Form`, `@FocusState` field order, Return to submit, Esc to cancel | Footer buttons `.glass`/`.glassProminent` |
 | Authentication | system LocalAuthentication dialog only | — |
 
 Glass styles are applied through `glassButtonStyle()` / `GlassGroup`, which fall back to the
