@@ -43,15 +43,6 @@ enum SettingsView {
             case .security: "How WardenFuse authenticates you and protects your keys."
             }
         }
-        var keywords: String {
-            switch self {
-            case .general: "login launch menu bar icon status"
-            case .bitwarden: "account server url sync login logout email vaultwarden"
-            case .browser: "chrome brave edge native messaging extension biometrics"
-            case .ssh: "socket ttl scope forwarding ssh config git signing keys"
-            case .security: "touch id password keychain lock sleep reset"
-            }
-        }
     }
 }
 
@@ -61,19 +52,12 @@ final class SettingsNavigation: ObservableObject {
     @Published private(set) var selection: SettingsView.Pane
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
-    @Published var query = ""
     private var back: [SettingsView.Pane] = []
     private var forward: [SettingsView.Pane] = []
 
     init() {
         let stored = UserDefaults.standard.string(forKey: "settingsPane")
         selection = stored.flatMap(SettingsView.Pane.init(rawValue:)) ?? .general
-    }
-
-    var visiblePanes: [SettingsView.Pane] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return SettingsView.Pane.allCases }
-        return SettingsView.Pane.allCases.filter { "\($0.title) \($0.keywords)".lowercased().contains(q) }
     }
 
     func select(_ p: SettingsView.Pane) {
@@ -103,36 +87,32 @@ final class SettingsNavigation: ObservableObject {
     }
 }
 
-/// Sidebar: search field, account row, colored icon tiles (System Settings layout).
+/// Sidebar: account row and colored icon tiles (System Settings layout). With five panes a
+/// search field would only add clutter.
 struct SettingsSidebar: View {
     @EnvironmentObject var core: CoreBridge
     @ObservedObject var nav: SettingsNavigation
 
     var body: some View {
-        VStack(spacing: 0) {
-            SearchField(text: $nav.query, prompt: "Search")
-                .padding(.horizontal, 10)
-                .padding(.bottom, 6)
-            List(selection: Binding(get: { nav.selection }, set: { if let p = $0 { nav.select(p) } })) {
-                if nav.query.isEmpty, let s = core.snapshot {
-                    AccountRow(s: s)
-                        .padding(.vertical, 4)
-                        .tag(SettingsView.Pane.bitwarden)
-                }
-                Section {
-                    ForEach(nav.visiblePanes) { p in
-                        Label {
-                            Text(p.title)
-                        } icon: {
-                            IconTile(symbol: p.symbol, tint: p.tint, size: 22)
-                        }
-                        .tag(p)
+        List(selection: Binding(get: { nav.selection }, set: { if let p = $0 { nav.select(p) } })) {
+            if let s = core.snapshot {
+                AccountRow(s: s)
+                    .padding(.vertical, 4)
+                    .tag(SettingsView.Pane.bitwarden)
+            }
+            Section {
+                ForEach(SettingsView.Pane.allCases) { p in
+                    Label {
+                        Text(p.title)
+                    } icon: {
+                        IconTile(symbol: p.symbol, tint: p.tint, size: 22)
                     }
+                    .tag(p)
                 }
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -168,35 +148,6 @@ struct SettingsDetail: View {
                 systemImage: "exclamationmark.shield",
                 description: core.startError.map(Text.init)
             )
-        }
-    }
-}
-
-/// Native `NSSearchField` (capsule, Liquid Glass on macOS 26+), as in System Settings.
-struct SearchField: NSViewRepresentable {
-    @Binding var text: String
-    let prompt: String
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let f = NSSearchField()
-        f.placeholderString = prompt
-        f.delegate = context.coordinator
-        f.controlSize = .large
-        f.sendsSearchStringImmediately = true
-        return f
-    }
-
-    func updateNSView(_ f: NSSearchField, context: Context) {
-        if f.stringValue != text { f.stringValue = text }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
-        func controlTextDidChange(_ n: Notification) {
-            if let f = n.object as? NSSearchField { text.wrappedValue = f.stringValue }
         }
     }
 }

@@ -43,7 +43,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     private func present(_ w: NSWindow?) {
         NSApp.activate()
         w?.makeKeyAndOrderFront(nil)
-        // Like System Settings, open without focusing the search field.
+        // Open without a focused control (no focus ring in the sidebar).
         if w === settings?.window { w?.makeFirstResponder(nil) }
     }
 
