@@ -264,7 +264,7 @@ pub unsafe extern "C" fn wf_command(id: u64, json: *const c_char) {
 }
 
 /// Completes an authentication request. `status`: 0 = success (key provided), 1 = cancelled,
-/// 2 = failed, 3 = unavailable, 4 = key missing, 5 = UI unavailable.
+/// 2 = failed, 3 = unavailable, 4 = key missing, 5 = UI unavailable, 6 = timed out.
 ///
 /// # Safety
 /// `key` must point to `len` readable bytes (or be null with `len == 0`).
@@ -289,6 +289,7 @@ pub unsafe extern "C" fn wf_auth_complete(id: u64, status: i32, key: *const u8, 
         3 => Err(AuthFailure::Unavailable),
         4 => Err(AuthFailure::KeyMissing),
         5 => Err(AuthFailure::UiUnavailable),
+        6 => Err(AuthFailure::Timeout),
         _ => Err(AuthFailure::Failed),
     };
     let _ = tx.send(res);

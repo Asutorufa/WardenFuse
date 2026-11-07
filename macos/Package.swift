@@ -3,7 +3,8 @@
 // (static library) and then this package, and assembles WardenFuse.app.
 import PackageDescription
 
-let rustLib = "../target/aarch64-apple-darwin/release"
+// Universal (arm64 + x86_64) static library assembled with lipo by scripts/build-app.sh.
+let rustLib = "../target/universal-apple-darwin/release"
 
 let package = Package(
     name: "WardenFuse",
@@ -29,6 +30,13 @@ let package = Package(
                 .linkedFramework("SystemConfiguration"),
                 .linkedFramework("CoreFoundation"),
             ]
+        ),
+        .testTarget(
+            name: "WardenFuseTests",
+            dependencies: ["WardenFuse"],
+            path: "Tests/WardenFuseTests",
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [.unsafeFlags(["-L", rustLib])]
         ),
     ]
 )

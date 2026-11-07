@@ -116,8 +116,14 @@ impl Settings {
             bail!("SSH socket path must name a file");
         }
         self.ssh_socket_path = sock.to_string_lossy().into_owned();
-        if !self.prefer_touch_id && !self.allow_password_fallback {
-            bail!("At least one of Touch ID or macOS password must be allowed");
+        // LocalAuthentication has no public "password only" policy:
+        // `.deviceOwnerAuthentication` always offers Touch ID when available. Supported:
+        // Touch ID only, or Touch ID with macOS password fallback.
+        if !self.prefer_touch_id {
+            bail!(
+                "macOS cannot require the system password without offering Touch ID; choose \
+                 \"Touch ID only\" or \"Touch ID or macOS password\""
+            );
         }
         Ok(self)
     }
@@ -273,7 +279,17 @@ impl ConfigStore {
             return Settings::default();
         };
         match serde_json::from_slice::<Settings>(&data).map_err(anyhow::Error::from) {
-            Ok(s) => s.validate().unwrap_or_else(|e| {
+            Ok(mut s) => {
+                // Migrate the unsupported "password only" combination of earlier builds to
+                // Touch ID with password fallback, keeping all other settings.
+                if !s.prefer_touch_id {
+                    s.prefer_touch_id = true;
+                    s.allow_password_fallback = true;
+                }
+                s
+            }
+            .validate()
+            .unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "Invalid settings file, using defaults");
                 Settings::default()
             }),
@@ -324,9 +340,29 @@ mod tests {
         s.ssh_socket_path = format!("/{}", "a".repeat(120));
         assert!(s.clone().validate().is_err());
         s.ssh_socket_path = "/tmp/x.sock".into();
+        s.allow_password_fallback = false;
+        assert!(s.clone().validate().is_ok(), "Touch ID only");
         s.prefer_touch_id = false;
+        s.allow_password_fallback = true;
+        assert!(
+            s.clone().validate().is_err(),
+            "password only is not enforceable"
+        );
         s.allow_password_fallback = false;
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn password_only_is_migrated_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("settings.json"),
+            br#"{"prefer_touch_id": false, "allow_password_fallback": true, "ssh_ttl_secs": 60}"#,
+        )
+        .unwrap();
+        let s = ConfigStore::new(dir.path()).load();
+        assert!(s.prefer_touch_id && s.allow_password_fallback);
+        assert_eq!(s.ssh_ttl_secs, 60, "other settings are kept");
     }
 
     #[test]

@@ -44,7 +44,7 @@ custom browser extension, HTTP management server, background daemon.
 
 ```
 WardenFuse.app (one process)                         wardenfuse-nmh (on demand, by the browser)
- ├─ SwiftUI menu bar / Settings / auth panel           stdin/stdout ⇄ ~/.wardenfuse/browser.sock
+ ├─ SwiftUI menu bar / Settings / Login               stdin/stdout ⇄ ~/.wardenfuse/browser.sock
  ├─ LocalAuthentication + Keychain (Swift)
  └─ Rust core (static library)
      ├─ Bitwarden SDK: login, tokens, sync
@@ -114,16 +114,29 @@ default (requests marked as forwarded by OpenSSH's `session-bind@openssh.com`).
 
 ## Touch ID Authentication
 
-* LocalAuthentication evaluates Touch ID first; the macOS login password is the system fallback
-  (no app-made password field). The macOS password is not your Bitwarden master password.
-* A small panel shows what is being authorized: key name and fingerprint, the requesting
-  executable as reported by the kernel (`LOCAL_PEERCRED` PID → `proc_pidpath`), usage
-  (SSH authentication, Git signing, file signing), remote host key when OpenSSH provides
-  `session-bind`, forwarding, and how long the authorization will last. Information that cannot be
-  verified is labelled as such.
-* After a successful evaluation, the Bitwarden user key is read from a Keychain item protected by
-  `SecAccessControl(.userPresence)` **with that evaluated `LAContext`**. The key bytes are what the
-  Rust core requires to decrypt an SSH key — authorization is not a stored boolean.
+* Only the macOS system dialog is shown (`LAContext.evaluatePolicy`); WardenFuse opens no window
+  of its own and never asks for a password itself. The macOS password is not your Bitwarden
+  master password.
+* The dialog's reason is built only from verified facts, e.g. *“WardenFuse” is trying to sign a
+  Git commit with SSH key “Personal”*, *authenticate with SSH key “GitHub” for ssh*, *unlock
+  Bitwarden in Brave Browser*, *unlock the WardenFuse SSH agent*. The requesting program is named
+  only when the kernel resolved its executable (`LOCAL_PEERCRED` PID → `proc_pidpath`); the Git /
+  file usage comes from the SSHSIG namespace parsed by the agent.
+* Authentication methods (Settings → Security):
+  * **Touch ID or macOS password** (default) — `.deviceOwnerAuthentication`: Touch ID first, the
+    system password dialog as fallback.
+  * **Touch ID only** — `.deviceOwnerAuthenticationWithBiometrics`: when Touch ID is unavailable
+    (e.g. lid closed), requests are denied.
+  * *Password only* is **not offered**: macOS has no public policy that excludes Touch ID, so it
+    cannot be enforced honestly. Settings files from earlier builds with that combination are
+    migrated to the default.
+* After a successful evaluation the context is switched to `interactionNotAllowed`, and the
+  Bitwarden user key is read from a Keychain item protected by `SecAccessControl(.userPresence)`
+  **with that evaluated `LAContext`** (`kSecUseAuthenticationContext`). The read therefore cannot
+  show a second dialog — if macOS wanted one, it fails instead (fail closed). The key bytes are
+  what the Rust core needs to decrypt an SSH key; there is no "authenticated" boolean.
+* One dialog at a time; cancel, failure and the 85 s timeout (the context is invalidated) return no
+  secret; quitting WardenFuse cancels a pending request.
 
 ## Authentication TTL
 
@@ -176,19 +189,29 @@ keeps nothing else.
 
 ## Supported Platforms
 
-macOS 15 or later on Apple Silicon (arm64), with or without Touch ID (password fallback). The
-code has no arm64-specific logic; an Intel/universal build only needs another Rust target and
-`lipo` in `scripts/build-app.sh`.
+* `WardenFuse.app` is a universal binary (arm64 + x86_64) with a minimum of macOS 15.
+* Apple Silicon: macOS 15, 26 and 27. Built with the macOS 27 SDK; Liquid Glass styling is used
+  on macOS 26 and later, standard controls on macOS 15.
+* Intel: macOS 15 and 26 (macOS 27 no longer supports Intel Macs). CI builds and tests the Rust
+  core natively on an Intel runner; the app itself has not been run on Intel hardware.
+* Touch ID is optional (system password fallback).
 
 ## Building from Source
 
-Requirements: Xcode 16+ (Swift 6 toolchain), Rust (stable), macOS 15+.
+Requirements: Xcode 27 (macOS 27 SDK), Rust 1.98.0 (pinned by `rust-toolchain.toml`; the
+`x86_64-apple-darwin` target is installed automatically by rustup).
 
 ```bash
 scripts/build-app.sh
 ```
 
-Output: `dist/WardenFuse.app`. Options:
+Output: universal `dist/WardenFuse.app`. Options:
+
+```bash
+ARCHS=arm64 scripts/build-app.sh
+```
+
+
 
 ```bash
 SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" TEAM_ID=TEAMID DMG=1 scripts/build-app.sh
@@ -205,8 +228,19 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The Swift package (`macos/Package.swift`) can be opened in Xcode; build the Rust library first
-(`cargo build --release --target aarch64-apple-darwin -p wardenfuse-core`).
+Swift tests (authentication coordinator with mocked LocalAuthentication / Keychain; run after
+`scripts/build-app.sh`, which produces the static library the package links):
+
+```bash
+swift test --package-path macos
+```
+
+The Swift package (`macos/Package.swift`) can be opened in Xcode. The app icon is generated from
+code (no SF Symbols, which may not be used in app icons):
+
+```bash
+swift scripts/make-icon.swift
+```
 
 ## Troubleshooting
 

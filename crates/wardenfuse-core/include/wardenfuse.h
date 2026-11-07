@@ -31,7 +31,8 @@ typedef struct {
 
 bool wf_start(const char *config_json, WFCallbacks callbacks);
 void wf_command(uint64_t id, const char *json);
-/// status: 0 ok (key provided), 1 cancelled, 2 failed, 3 unavailable, 4 key missing, 5 no UI.
+/// status: 0 ok (key provided), 1 cancelled, 2 failed, 3 unavailable, 4 key missing, 5 no UI,
+/// 6 timed out.
 void wf_auth_complete(uint64_t id, int32_t status, const uint8_t *key, size_t len);
 void wf_shutdown(void);
 

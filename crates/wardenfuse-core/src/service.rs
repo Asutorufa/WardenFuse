@@ -306,6 +306,15 @@ impl Core {
                 // Coalesce bursts of changes.
                 tokio::time::sleep(Duration::from_millis(30)).await;
                 let snap = Core(core.clone()).snapshot().await;
+                tracing::debug!(
+                    logged_in = %snap["account"]["logged_in"],
+                    usable = %snap["ssh"]["usable"],
+                    list_complete = %snap["ssh"]["list_complete"],
+                    vault_keys = %snap["ssh"]["vault_key_count"],
+                    ssh_error = %snap["ssh"]["error"],
+                    sync_error = %snap["sync"]["error"],
+                    "state"
+                );
                 core.platform.state_changed(snap.to_string());
             }
         });

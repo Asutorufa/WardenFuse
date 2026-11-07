@@ -21,12 +21,13 @@ struct WardenFuseApp: App {
             SettingsView()
                 .environmentObject(core)
         }
+        .windowResizability(.contentMinSize)
 
         Window("Log In to Bitwarden", id: "login") {
             LoginView()
                 .environmentObject(core)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .defaultPosition(.center)
     }
 }

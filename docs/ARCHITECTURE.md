@@ -6,7 +6,7 @@
 WardenFuse.app  (one resident process, LSUIElement menu bar app)
 ├── SwiftUI / AppKit (main thread)
 │   ├── MenuBarExtra (.window), Settings scene, Login window — created on demand
-│   ├── Authenticator: LAContext + auth panel, Keychain reads (SecAccessControl)
+│   ├── AuthCoordinator: system LAContext dialog only, Keychain reads (SecAccessControl)
 │   ├── KeychainStore, SystemEvents (sleep / screen lock / user switch / network)
 │   └── SMAppService.mainApp (Launch at Login — no LaunchAgent plist)
 └── Rust core, static library (libwardenfuse_core.a), Tokio: 2 workers, ≤2 blocking
@@ -106,8 +106,8 @@ login (master password) ──SDK──▶ user key ──▶ Keychain item (Sec
 sign request ─▶ grant valid? ──yes──▶ sign (private key still in secure_memory store)
                     │no
                     ▼
-        auth panel + LAContext.evaluatePolicy
-                    ▼
+        LAContext.evaluatePolicy (system dialog only)
+                    ▼ context.interactionNotAllowed = true
         SecItemCopyMatching(kSecUseAuthenticationContext = evaluated context)
                     ▼ user key (only now in Rust memory, Zeroizing)
         decrypt this cipher's private key (bitwarden-crypto) → upstream InMemoryEncryptedKeyStore
@@ -143,3 +143,21 @@ configured maximum (default 72 h), the agent refuses to list or sign until a syn
 | `…/vault-cache.json` | SSH ciphers **as EncStrings** + wrapped org/private keys | 0600, encrypted by Bitwarden keys |
 | `~/.wardenfuse/ssh-agent.sock`, `browser.sock` | sockets | dir 0700, sockets 0600, peer uid check |
 | `~/Library/Application Support/<Browser>/NativeMessagingHosts/com.8bit.bitwarden.json` | NMH manifest | official extension origins only |
+
+## User interface
+
+Standard SwiftUI components carry the design; WardenFuse adds no blur, vibrancy or custom
+backgrounds of its own.
+
+| Surface | Implementation | Liquid Glass |
+|---|---|---|
+| Menu bar | `MenuBarExtra(.window)`: header, label/value status rows, one action group, menu-style Settings/Quit rows with key equivalents | Window drawn by the system; only the Lock/Unlock + Sync buttons use `.glass`/`.glassProminent` inside one `GlassEffectContainer` |
+| Settings | `Settings` scene, toolbar `TabView`, grouped `Form` + `LabeledContent`/`Picker`/`Toggle`, resizable (`.contentMinSize`) | Toolbar and controls are rendered by the system |
+| Login | `Window` with grouped `Form`, `@FocusState` field order, Return to submit, Esc to cancel | Footer buttons `.glass`/`.glassProminent` |
+| Authentication | system LocalAuthentication dialog only | — |
+
+Glass styles are applied through `glassButtonStyle()` / `GlassGroup`, which fall back to the
+standard bordered styles below macOS 26. Reduce Transparency, Increase Contrast and Reduce Motion
+are handled by the system materials; the app has no custom animations. The only periodically
+updating views are `Text(timerInterval:)` (TTL countdown) and relative dates, rendered by the
+system text engine while the menu is open — no app timers.

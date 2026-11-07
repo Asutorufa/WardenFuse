@@ -1,7 +1,8 @@
 #!/bin/bash
-# Builds WardenFuse.app (Apple Silicon, release).
+# Builds WardenFuse.app (release, universal arm64 + x86_64 by default).
 #
 #   scripts/build-app.sh                 # ad-hoc signed (Keychain fallback mode)
+#   ARCHS="arm64" scripts/build-app.sh   # single architecture (faster local builds)
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" TEAM_ID=TEAMID scripts/build-app.sh
 #   DMG=1 scripts/build-app.sh           # also create dist/WardenFuse.dmg
 #
@@ -10,26 +11,40 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-TARGET="${TARGET:-aarch64-apple-darwin}"
+ARCHS="${ARCHS:-arm64 x86_64}"
 VERSION="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
 BUILD="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 DIST="$ROOT/dist"
 APP="$DIST/WardenFuse.app"
 
-echo "==> Rust core + native messaging host ($TARGET)"
 export MACOSX_DEPLOYMENT_TARGET=15.0
-cargo build --release --locked --target "$TARGET" -p wardenfuse-core -p wardenfuse-nmh
+UNI="target/universal-apple-darwin/release"
+mkdir -p "$UNI"
+LIBS=(); NMHS=(); SWIFT_ARCHS=()
+for arch in $ARCHS; do
+  case "$arch" in
+    arm64) t=aarch64-apple-darwin ;;
+    x86_64) t=x86_64-apple-darwin ;;
+    *) echo "unknown arch $arch" >&2; exit 1 ;;
+  esac
+  echo "==> Rust core + native messaging host ($t)"
+  cargo build --release --locked --target "$t" -p wardenfuse-core -p wardenfuse-nmh
+  LIBS+=("target/$t/release/libwardenfuse_core.a")
+  NMHS+=("target/$t/release/wardenfuse-nmh")
+  SWIFT_ARCHS+=(--arch "$arch")
+done
+lipo -create "${LIBS[@]}" -output "$UNI/libwardenfuse_core.a"
+lipo -create "${NMHS[@]}" -output "$UNI/wardenfuse-nmh"
 
-echo "==> SwiftUI app"
-swift build -c release --package-path macos --arch arm64 \
-  -Xlinker -dead_strip
-SWIFT_BIN="$(swift build -c release --package-path macos --arch arm64 --show-bin-path)/WardenFuse"
+echo "==> SwiftUI app ($ARCHS)"
+swift build -c release --package-path macos "${SWIFT_ARCHS[@]}" -Xlinker -dead_strip
+SWIFT_BIN="$(swift build -c release --package-path macos "${SWIFT_ARCHS[@]}" --show-bin-path)/WardenFuse"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SWIFT_BIN" "$APP/Contents/MacOS/WardenFuse"
-cp "target/$TARGET/release/wardenfuse-nmh" "$APP/Contents/MacOS/wardenfuse-nmh"
+cp "$UNI/wardenfuse-nmh" "$APP/Contents/MacOS/wardenfuse-nmh"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" \
   macos/WardenFuse/Resources/Info.plist > "$APP/Contents/Info.plist"
 if [ -f macos/WardenFuse/Resources/AppIcon.icns ]; then
@@ -70,4 +85,5 @@ if [ "${DMG:-0}" = "1" ]; then
   fi
 fi
 
+lipo -info "$APP/Contents/MacOS/WardenFuse" "$APP/Contents/MacOS/wardenfuse-nmh"
 du -sh "$APP" | awk '{print "==> Done: " $2 " (" $1 ")"}'

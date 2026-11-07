@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Bitwarden login (master password with 2FA, or personal API key). The master password is
-/// sent to the core once and never stored; the core runs the official SDK login.
+/// Bitwarden login (master password with two-step login, or personal API key). The master
+/// password is passed to the core once and never stored; the core runs the official SDK login.
 struct LoginView: View {
     @EnvironmentObject var core: CoreBridge
     @Environment(\.dismissWindow) private var dismissWindow
 
     enum Method: String, CaseIterable, Identifiable {
-        case password = "Master password"
-        case apiKey = "API key"
+        case password = "Master Password"
+        case apiKey = "API Key"
         var id: String { rawValue }
     }
+
+    enum Field: Hashable { case server, email, clientId, clientSecret, password, code }
 
     @State private var method: Method = .password
     @State private var server = "https://vault.bitwarden.com"
@@ -25,99 +27,157 @@ struct LoginView: View {
     @State private var remember = false
     @State private var busy = false
     @State private var error: String?
+    @FocusState private var focus: Field?
 
     private static let servers = [
-        ("Bitwarden (US)", "https://vault.bitwarden.com"),
-        ("Bitwarden (EU)", "https://vault.bitwarden.eu"),
+        ("bitwarden.com (US)", "https://vault.bitwarden.com"),
+        ("bitwarden.eu (EU)", "https://vault.bitwarden.eu"),
     ]
+    private var isCustomServer: Bool { !Self.servers.contains { $0.1 == server } }
+    private var inTwoFactor: Bool { !twoFactorMethods.isEmpty }
 
     var body: some View {
-        Form {
-            Section {
-                Picker("Server", selection: Binding(
-                    get: { Self.servers.contains { $0.1 == server } ? server : "custom" },
-                    set: { if $0 != "custom" { server = $0 } else if Self.servers.contains(where: { $0.1 == server }) { server = "https://" } }
-                )) {
-                    ForEach(Self.servers, id: \.1) { Text($0.0).tag($0.1) }
-                    Text("Self-hosted / Vaultwarden").tag("custom")
+        VStack(spacing: 0) {
+            Form {
+                if inTwoFactor { twoFactorSection } else { credentialsSections }
+                if let error {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityLabel("Login error: \(error)")
+                    }
                 }
-                if !Self.servers.contains(where: { $0.1 == server }) {
-                    TextField("Server URL", text: $server, prompt: Text("https://vault.example.com"))
-                        .textContentType(.URL)
-                }
-                Picker("Method", selection: $method) {
-                    ForEach(Method.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
             }
+            .formStyle(.grouped)
+            .disabled(busy)
 
-            if twoFactorMethods.isEmpty {
-                Section {
-                    if method == .password {
-                        TextField("Email", text: $email).textContentType(.username)
-                    } else {
-                        TextField("client_id", text: $clientId)
-                        SecureField("client_secret", text: $clientSecret)
-                    }
-                    SecureField("Master password", text: $password).textContentType(.password)
-                } footer: {
-                    Text(method == .password
-                         ? "Your master password is used once to unlock your vault key, which is then protected by the macOS Keychain. It is never stored."
-                         : "Use the personal API key from the Bitwarden web vault (Settings → Security → Keys). It avoids new-device email verification.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            } else {
-                Section("Two-step login") {
-                    Picker("Method", selection: $selected2FA) {
-                        ForEach(twoFactorMethods, id: \.self) { Text(label2FA($0)).tag($0) }
-                    }
-                    TextField("Code", text: $code).textContentType(.oneTimeCode)
-                    Toggle("Remember this device", isOn: $remember)
-                    if selected2FA == "email" {
-                        Button("Send code by email") { Task { await submit(sendEmail: true) } }
-                            .disabled(busy)
-                    }
-                    if !unsupported.isEmpty {
-                        Text("Not supported by WardenFuse: \(unsupported.joined(separator: ", "))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            if let error {
-                Text(error).foregroundStyle(.red).font(.callout)
-            }
-
-            HStack {
-                if !twoFactorMethods.isEmpty {
-                    Button("Back") { twoFactorMethods = []; code = "" }
-                }
-                Spacer()
-                if busy { ProgressView().controlSize(.small) }
-                Button("Cancel") { dismissWindow(id: "login") }
-                Button("Log In") { Task { await submit(sendEmail: false) } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(busy || password.isEmpty)
-            }
+            footer
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .padding(.top, 4)
         }
-        .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(minWidth: 420, idealWidth: 460, maxWidth: 720, minHeight: 360, idealHeight: 440, maxHeight: .infinity)
         .onAppear {
-            if let s = core.snapshot { server = s.settings.serverUrl; email = s.account.email ?? email }
+            if let s = core.snapshot {
+                server = s.settings.serverUrl
+                if email.isEmpty { email = s.account.email ?? "" }
+            }
+            focus = email.isEmpty ? .email : .password
         }
         .onDisappear { password = ""; clientSecret = ""; code = "" }
     }
 
+    @ViewBuilder
+    private var credentialsSections: some View {
+        Section {
+            Picker("Server", selection: Binding(
+                get: { isCustomServer ? "custom" : server },
+                set: { v in
+                    if v != "custom" { server = v } else if !isCustomServer { server = "https://"; focus = .server }
+                })) {
+                ForEach(Self.servers, id: \.1) { Text($0.0).tag($0.1) }
+                Text("Self-hosted").tag("custom")
+            }
+            if isCustomServer {
+                TextField("Server URL", text: $server, prompt: Text("https://vault.example.com"))
+                    .textContentType(.URL)
+                    .focused($focus, equals: .server)
+                    .onSubmit { focus = method == .password ? .email : .clientId }
+            }
+            Picker("Log in with", selection: $method) {
+                ForEach(Method.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+        }
+        Section {
+            if method == .password {
+                TextField("Email", text: $email, prompt: Text("name@example.com"))
+                    .textContentType(.username)
+                    .focused($focus, equals: .email)
+                    .onSubmit { focus = .password }
+            } else {
+                TextField("client_id", text: $clientId, prompt: Text("user.xxxxxxxx"))
+                    .focused($focus, equals: .clientId)
+                    .onSubmit { focus = .clientSecret }
+                SecureField("client_secret", text: $clientSecret)
+                    .focused($focus, equals: .clientSecret)
+                    .onSubmit { focus = .password }
+            }
+            SecureField("Master password", text: $password)
+                .textContentType(.password)
+                .focused($focus, equals: .password)
+                .onSubmit { Task { await submit(sendEmail: false) } }
+        } footer: {
+            Text(method == .password
+                 ? "Your master password unlocks your vault key once; the key is then protected by the macOS Keychain. The password is never stored."
+                 : "Use the personal API key from the Bitwarden web vault (Settings \u{2192} Security \u{2192} Keys). It avoids new-device email verification.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var twoFactorSection: some View {
+        Section {
+            Picker("Method", selection: $selected2FA) {
+                ForEach(twoFactorMethods, id: \.self) { Text(label2FA($0)).tag($0) }
+            }
+            TextField("Verification code", text: $code)
+                .textContentType(.oneTimeCode)
+                .focused($focus, equals: .code)
+                .onSubmit { Task { await submit(sendEmail: false) } }
+            Toggle("Remember this Mac", isOn: $remember)
+            if selected2FA == "email" {
+                Button("Send Code by Email") { Task { await submit(sendEmail: true) } }
+            }
+        } header: {
+            Text("Two-step login")
+        } footer: {
+            if !unsupported.isEmpty {
+                Text("Not supported by WardenFuse: \(unsupported.joined(separator: ", ")).")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { focus = .code }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            if inTwoFactor {
+                Button("Back") { twoFactorMethods = []; code = ""; error = nil; focus = .password }
+                    .glassButtonStyle()
+            }
+            if busy {
+                ProgressView().controlSize(.small)
+                Text("Logging in\u{2026}").foregroundStyle(.secondary)
+            }
+            Spacer()
+            GlassGroup {
+                HStack(spacing: 10) {
+                    Button("Cancel") { dismissWindow(id: "login") }
+                        .keyboardShortcut(.cancelAction)
+                        .glassButtonStyle()
+                    Button(inTwoFactor ? "Verify" : "Log In") { Task { await submit(sendEmail: false) } }
+                        .keyboardShortcut(.defaultAction)
+                        .glassButtonStyle(prominent: true)
+                        .disabled(busy || password.isEmpty || (inTwoFactor && code.isEmpty))
+                }
+            }
+        }
+        .controlSize(.large)
+    }
+
     private func label2FA(_ m: String) -> String {
         switch m {
-        case "authenticator": return "Authenticator app"
-        case "email": return "Email"
-        case "yubikey": return "YubiKey OTP"
-        default: return m
+        case "authenticator": "Authenticator app"
+        case "email": "Email"
+        case "yubikey": "YubiKey OTP"
+        default: m
         }
     }
 
     private func submit(sendEmail: Bool) async {
+        guard !busy else { return }
         busy = true
         error = nil
         defer { busy = false }
@@ -126,7 +186,7 @@ struct LoginView: View {
         if method == .password {
             cmd = "login"
             args["email"] = email
-            if !twoFactorMethods.isEmpty {
+            if inTwoFactor {
                 args["two_factor"] = ["method": selected2FA, "code": sendEmail ? "" : code, "remember": remember]
             }
         } else {
@@ -145,8 +205,10 @@ struct LoginView: View {
             unsupported = r["unsupported"] as? [String] ?? []
             if !tf.contains(selected2FA), let first = tf.first { selected2FA = first }
             if tf.isEmpty { error = "This account only offers two-step methods WardenFuse does not support." }
+            focus = .code
             return
         }
         error = r["error"] as? String ?? "Login failed"
+        focus = .password
     }
 }

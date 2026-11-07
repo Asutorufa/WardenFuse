@@ -11,13 +11,25 @@ permissions:
 
 jobs:
   rust:
-    runs-on: macos-15
+    name: rust (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      # Toolchain version comes from rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
       - name: Format (WardenFuse crates; vendored crates keep upstream formatting)
         run: cargo fmt -p wardenfuse-core -p wardenfuse-nmh --check
       - name: Clippy
@@ -28,21 +40,27 @@ jobs:
         run: cargo build --release --locked
 
   app:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - name: Build WardenFuse.app (ad-hoc signed) and DMG
+      - name: Swift tests (authentication coordinator, mocked LocalAuthentication)
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin -p wardenfuse-core
+          mkdir -p target/universal-apple-darwin/release
+          cp target/aarch64-apple-darwin/release/libwardenfuse_core.a target/universal-apple-darwin/release/
+          swift test --package-path macos --arch arm64
+      - name: Build universal WardenFuse.app (arm64 + x86_64, ad-hoc signed) and DMG
         env:
           DMG: "1"
         run: scripts/build-app.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: WardenFuse-unsigned
           path: dist/WardenFuse.dmg
@@ -50,17 +68,17 @@ jobs:
   # Developer ID signing + notarization; runs only when the secrets are configured.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: macos-15
+    runs-on: macos-26
     needs: app
     env:
       HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.0
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Import signing certificate
         if: env.HAS_CERT == 'true'
         env:
@@ -85,7 +103,7 @@ jobs:
           xcrun notarytool store-credentials wardenfuse --apple-id "${{ secrets.NOTARY_APPLE_ID }}" \
             --team-id "$TEAM_ID" --password "${{ secrets.NOTARY_PASSWORD }}"
           scripts/notarize.sh dist/WardenFuse.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: env.HAS_CERT == 'true'
         with:
           name: WardenFuse

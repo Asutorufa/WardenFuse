@@ -15,7 +15,7 @@ final class CoreBridge: ObservableObject {
     @Published private(set) var startError: String?
 
     let keychain = KeychainStore()
-    let authenticator = Authenticator()
+    private(set) lazy var auth: AuthCoordinator = Authenticator.make(keychain: keychain)
 
     private var nextCommandId: UInt64 = 1
     private var pending: [UInt64: CheckedContinuation<[String: Any], Never>] = [:]
@@ -54,6 +54,8 @@ final class CoreBridge: ObservableObject {
 
     func shutdown() {
         guard started else { return }
+        // No secret is returned for a request that is still waiting for the user.
+        auth.cancelAll()
         wf_shutdown()
     }
 
@@ -119,7 +121,7 @@ private func wfAuthRequest(_ ctx: UnsafeMutableRawPointer?, _ id: UInt64, _ json
             wf_auth_complete(id, 2, nil, 0)
             return
         }
-        CoreBridge.shared.authenticator.handle(id: id, request: req, keychain: CoreBridge.shared.keychain)
+        CoreBridge.shared.auth.handle(id: id, request: req)
     }
 }
 
