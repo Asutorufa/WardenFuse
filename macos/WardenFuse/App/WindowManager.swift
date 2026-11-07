@@ -108,9 +108,8 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         w.titleVisibility = .hidden
         w.titlebarSeparatorStyle = .none
         w.toolbarStyle = .unified
-        // No titlebar/toolbar background of its own: at rest the toolbar sits on the content
-        // surface; when content scrolls under it the system draws its scroll-edge effect.
-        w.titlebarAppearsTransparent = true
+        // Keep the standard titlebar: it is what gives the Liquid Glass scroll-edge blur when
+        // content scrolls under the toolbar (a transparent titlebar disables it).
         w.isReleasedWhenClosed = false
         w.setContentSize(NSSize(width: 880, height: 660))
         w.contentMinSize = NSSize(width: 740, height: 480)
