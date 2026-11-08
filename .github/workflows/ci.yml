@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -64,52 +65,48 @@ jobs:
       - name: Build universal WardenFuse.app (arm64 + x86_64, ad-hoc signed) and DMG
         env:
           DMG: "1"
-        run: scripts/build-app.sh
+        run: |
+          # Keep the app's CFBundleShortVersionString in sync with the release tag.
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            export APP_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          scripts/build-app.sh
       - uses: actions/upload-artifact@v5
         with:
-          name: WardenFuse-unsigned
+          name: WardenFuse-ad-hoc
           path: dist/WardenFuse.dmg
 
-  # Developer ID signing + notarization; runs only when the secrets are configured.
+  # Tag releases reuse the ad-hoc signed DMG built and tested by the app job.
+  # No Apple Developer account, certificate, or notarization credentials are needed.
   release:
+    name: Publish ad-hoc macOS release
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: macos-26
+    runs-on: ubuntu-latest
     needs: app
-    env:
-      HAS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - name: Download ad-hoc DMG
+        uses: actions/download-artifact@v5
         with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-      - name: Import signing certificate
-        if: env.HAS_CERT == 'true'
-        env:
-          P12: ${{ secrets.MACOS_CERT_P12 }}
-          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          name: WardenFuse-ad-hoc
+          path: dist
+      - name: Generate SHA-256 checksum
         run: |
-          echo "$P12" | base64 --decode > cert.p12
-          security create-keychain -p ci build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p ci build.keychain
-          security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
-          rm cert.p12
-      - name: Build, sign, notarize
-        if: env.HAS_CERT == 'true'
-        env:
-          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
-          TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
-          DMG: "1"
-        run: |
-          scripts/build-app.sh
-          xcrun notarytool store-credentials wardenfuse --apple-id "${{ secrets.NOTARY_APPLE_ID }}" \
-            --team-id "$TEAM_ID" --password "${{ secrets.NOTARY_PASSWORD }}"
-          scripts/notarize.sh dist/WardenFuse.dmg
-      - uses: actions/upload-artifact@v5
-        if: env.HAS_CERT == 'true'
+          cd dist
+          sha256sum WardenFuse.dmg > WardenFuse.dmg.sha256
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: WardenFuse
-          path: dist/WardenFuse.dmg
+          files: |
+            dist/WardenFuse.dmg
+            dist/WardenFuse.dmg.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Universal macOS app (Apple Silicon + Intel), signed ad-hoc without an
+            Apple Developer certificate. This build is **not notarized**.
+
+            After copying WardenFuse.app to Applications, macOS Gatekeeper may
+            block the first launch. Try opening it, then use System Settings →
+            Privacy & Security → Open Anyway to allow this app.
