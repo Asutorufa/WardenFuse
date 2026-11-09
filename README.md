@@ -66,6 +66,12 @@ Details, the SDK reuse decision (with measurements) and data flows:
 5. Settings → **SSH Agent** → *Add to ~/.ssh/config…* (or copy the snippet).
 6. Settings → General → *Launch at login* (optional).
 
+Release DMGs are **ad-hoc signed**, not Developer ID signed or Apple-notarized. This
+requires no paid Apple Developer account, but Gatekeeper may block the downloaded app.
+If that happens, try opening WardenFuse once, then go to **System Settings → Privacy &
+Security → Open Anyway** and confirm. Only do this for a build you trust; the GitHub
+Release also includes a SHA-256 checksum.
+
 No terminal commands are required. If Bitwarden Desktop is installed, WardenFuse detects its
 native messaging manifest and only replaces it after you confirm (a backup is kept and restored
 when you remove WardenFuse's connection).
@@ -210,6 +216,20 @@ Output: universal `dist/WardenFuse.app`. Options:
 ```bash
 ARCHS=arm64 scripts/build-app.sh
 ```
+
+### GitHub Releases (no signing certificate required)
+
+Push a version tag to trigger the CI tests, universal macOS build, ad-hoc signing,
+DMG packaging, and automatic GitHub Release upload:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The version in the app bundle is taken from the tag. GitHub Releases contain
+`WardenFuse.dmg` and `WardenFuse.dmg.sha256`. No Apple signing/notarization
+secrets are needed. Regular CI runs also upload the ad-hoc DMG as an Actions artifact.
 
 
 
