@@ -47,6 +47,8 @@ pub struct SessionBlob {
     pub email: String,
     pub login_method: UserLoginMethod,
     pub tokens: AuthenticationTokens,
+    #[serde(default = "uuid::Uuid::new_v4")]
+    pub android_session_id: uuid::Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +188,7 @@ pub struct BitwardenSession {
     pub urls: ServerUrls,
     pub user_id: String,
     pub email: String,
+    pub(crate) android_session_id: uuid::Uuid,
     client: Client,
     sync: SyncClient,
     latest: Arc<Mutex<Option<EncryptedVault>>>,
@@ -205,6 +208,7 @@ impl BitwardenSession {
             urls,
             user_id,
             email,
+            android_session_id: uuid::Uuid::new_v4(),
             client,
             sync,
             latest,
@@ -378,12 +382,9 @@ impl BitwardenSession {
     pub async fn restore(blob: &[u8]) -> Result<Self> {
         let blob: SessionBlob = serde_json::from_slice(blob)?;
         let registry = Self::seeded_registry(blob.tokens, blob.login_method).await?;
-        Ok(Self::new(
-            &blob.server_url,
-            registry,
-            blob.user_id,
-            blob.email,
-        ))
+        let mut session = Self::new(&blob.server_url, registry, blob.user_id, blob.email);
+        session.android_session_id = blob.android_session_id;
+        Ok(session)
     }
 
     /// Serializes the current tokens + login method for the Keychain.
@@ -410,6 +411,7 @@ impl BitwardenSession {
             email: self.email.clone(),
             login_method,
             tokens,
+            android_session_id: self.android_session_id,
         })?))
     }
 

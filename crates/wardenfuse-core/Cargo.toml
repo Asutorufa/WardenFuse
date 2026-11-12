@@ -23,20 +23,28 @@ bitwarden-crypto = { workspace = true }
 bitwarden-ipc = { workspace = true, features = ["test-support"] }
 bitwarden-state = { workspace = true }
 bitwarden-sync = { workspace = true }
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures = { workspace = true }
 libc = { workspace = true }
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+ring = "0.17.14"
+rsa = { version = "=0.9.6", features = ["getrandom"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 secure_memory = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "=0.10.9"
+sha1 = "=0.10.7"
 ssh_agent = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 tokio-util = { workspace = true, features = ["codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+subtle = "2.6.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = { workspace = true }
 

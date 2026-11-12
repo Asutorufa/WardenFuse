@@ -11,7 +11,8 @@ A lightweight native Bitwarden biometric bridge and SSH agent for macOS.
 WardenFuse gives you two Bitwarden Desktop features without running the Electron desktop app:
 
 1. **Browser biometric unlock** — the *official, unmodified* Bitwarden browser extension
-   (Chrome, Brave, Edge, Chromium, Vivaldi) unlocks with Touch ID or your macOS password.
+   (Chrome, Brave, Edge, Chromium, Vivaldi) unlocks with Touch ID, your macOS password,
+   or a [paired Android device](docs/ANDROID.md).
 2. **SSH agent** — the SSH keys stored in your Bitwarden vault are served by an
    OpenSSH-compatible agent, and every signature is authorized with Touch ID / macOS password,
    cached for a configurable time.
@@ -87,8 +88,8 @@ In the official Bitwarden extension: *Settings → Account security → Unlock w
   origin is allowed.
 * The browser must be logged into the same Bitwarden account as WardenFuse; other accounts get
   `wrongUserId` / no key.
-* Every browser unlock asks for Touch ID or your password. It is never satisfied by the SSH
-  authorization TTL.
+* Every browser unlock requires fresh authentication, independent of the SSH authorization
+  TTL. **Settings → Browser → Browser authentication** selects macOS or [Android](docs/ANDROID.md).
 * Both channels are implemented: legacy (`setupEncryption` RSA-OAEP handshake + AES-CBC-HMAC
   messages) and SDK IPC (`DesktopRenderer` endpoint on `bitwarden-ipc` with the Noise
   provider: `DiscoverRequest`, `GetBiometricsStatus`, `UnlockBiometrics`,
@@ -189,9 +190,9 @@ For daily use, sign with at least a free Apple Development certificate.
 
 ## Privacy
 
-WardenFuse talks only to your Bitwarden server (identity, API, notifications). No telemetry, no
-analytics, no other network traffic. It requests only SSH-key relevant data from sync results and
-keeps nothing else.
+WardenFuse connects to your Bitwarden server for identity, API and notifications. If you enable
+Android browser unlock, the Mac also listens for authenticated connections from paired phones.
+WardenFuse has no telemetry or analytics.
 
 ## Supported Platforms
 

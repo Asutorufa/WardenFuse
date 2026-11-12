@@ -45,6 +45,37 @@ jobs:
       - name: Release build
         run: cargo build --release --locked
 
+  android:
+    name: Android (unit tests, lint, debug APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Run Android unit tests, lint, and build debug APK
+        working-directory: android
+        run: |
+          ARGS=()
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            ARGS+=("-PappVersion=${GITHUB_REF_NAME#v}")
+          fi
+          ./gradlew --no-daemon "${ARGS[@]}" :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - name: Upload Android debug APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: WardenFuse-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   app:
     runs-on: macos-26
     needs: rust
@@ -79,10 +110,10 @@ jobs:
   # Tag releases reuse the ad-hoc signed DMG built and tested by the app job.
   # No Apple Developer account, certificate, or notarization credentials are needed.
   release:
-    name: Publish ad-hoc macOS release
+    name: Publish macOS and Android release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: app
+    needs: [app, android]
     permissions:
       contents: write
     steps:
@@ -91,16 +122,25 @@ jobs:
         with:
           name: WardenFuse-ad-hoc
           path: dist
-      - name: Generate SHA-256 checksum
+      - name: Download Android debug APK
+        uses: actions/download-artifact@v5
+        with:
+          name: WardenFuse-android-debug
+          path: dist
+      - name: Rename APK and generate SHA-256 checksums
         run: |
           cd dist
+          mv app-debug.apk "WardenFuse-android-${GITHUB_REF_NAME}.apk"
           sha256sum WardenFuse.dmg > WardenFuse.dmg.sha256
+          sha256sum "WardenFuse-android-${GITHUB_REF_NAME}.apk" > "WardenFuse-android-${GITHUB_REF_NAME}.apk.sha256"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/WardenFuse.dmg
             dist/WardenFuse.dmg.sha256
+            dist/WardenFuse-android-*.apk
+            dist/WardenFuse-android-*.apk.sha256
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
@@ -110,3 +150,6 @@ jobs:
             After copying WardenFuse.app to Applications, macOS Gatekeeper may
             block the first launch. Try opening it, then use System Settings →
             Privacy & Security → Open Anyway to allow this app.
+
+            The Android APK is signed with the debug key (not a Play Store
+            release key); enable "install unknown apps" to sideload it.

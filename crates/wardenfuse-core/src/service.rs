@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 use crate::{
+    android::{self, Android},
     authz::{Authorizations, Scope},
     bitwarden::{
         notifications::{self, PushEvent},
@@ -24,7 +25,7 @@ use crate::{
     },
     browser::{manifest::Manifests, BrowserBackend, BrowserBridge, LegacyBiometricsStatus},
     clock::{Clock, SystemClock},
-    config::{self, ConfigStore, Settings},
+    config::{self, BrowserAuthentication, ConfigStore, Settings},
     platform::{AuthFailure, AuthPurpose, AuthRequest, BiometryState, Platform},
     ssh::{parse_public_key, GatedKeyStore, MetaKeyData, SshAgentService, UnlockTarget, Unlocker},
     ssh_config,
@@ -84,7 +85,9 @@ pub struct CoreInner {
     bridge: tokio::sync::Mutex<Option<BrowserBridge>>,
     auth_lock: tokio::sync::Mutex<()>,
     sync_lock: tokio::sync::Mutex<()>,
-    state_dirty: Notify,
+    account_lock: tokio::sync::Mutex<()>,
+    android: Arc<Android>,
+    state_dirty: Arc<Notify>,
     grants_dirty: Notify,
     sync_wake: Notify,
     account_tasks: Mutex<Option<CancellationToken>>,
@@ -184,7 +187,20 @@ impl BrowserBackend for UnlockerHandle {
         if user_id.is_some_and(|u| u != current) {
             return LegacyBiometricsStatus::NotEnabledInConnectedDesktopApp;
         }
-        let allow_password = lock(&core.settings).allow_password_fallback;
+        let (method, allow_password) = {
+            let settings = lock(&core.settings);
+            (
+                settings.browser_authentication,
+                settings.allow_password_fallback,
+            )
+        };
+        if method == BrowserAuthentication::Android {
+            return if core.android.available() {
+                LegacyBiometricsStatus::Available
+            } else {
+                LegacyBiometricsStatus::NotEnabledInConnectedDesktopApp
+            };
+        }
         match core.platform.biometry_state() {
             BiometryState::Available => LegacyBiometricsStatus::Available,
             _ if allow_password => LegacyBiometricsStatus::Available,
@@ -194,14 +210,8 @@ impl BrowserBackend for UnlockerHandle {
 
     async fn unlock_user_key(&self, user_id: &str, browser: &str) -> Option<Zeroizing<String>> {
         let core = self.core()?;
-        if self.logged_in_user().await.as_deref() != Some(user_id) {
-            return None;
-        }
-        // Always a fresh authentication: never derived from the SSH TTL.
         let key = core
-            .authenticate(AuthPurpose::BrowserUnlock {
-                browser: browser.to_owned(),
-            })
+            .browser_authenticate(Some(user_id), browser, false)
             .await
             .ok()?;
         let s = Zeroizing::new(std::str::from_utf8(&key).ok()?.to_owned());
@@ -212,14 +222,7 @@ impl BrowserBackend for UnlockerHandle {
         let Some(core) = self.core() else {
             return false;
         };
-        if self.logged_in_user().await.is_none() {
-            return false;
-        }
-        core.authenticate(AuthPurpose::BrowserVerify {
-            browser: browser.to_owned(),
-        })
-        .await
-        .is_ok()
+        core.browser_authenticate(None, browser, true).await.is_ok()
     }
 }
 
@@ -249,7 +252,9 @@ impl Core {
         );
         let store = GatedKeyStore::new(Arc::new(Mutex::new(authz)));
         store.set_list_when_locked(settings.list_keys_when_locked);
+        let state_dirty = Arc::new(Notify::new());
         let inner = Arc::new(CoreInner {
+            android: Android::new(&cfg.data_dir, state_dirty.clone()),
             cache: VaultCache::new(&cfg.data_dir),
             manifests: Manifests::new(cfg.nmh_path.clone()),
             cfg,
@@ -265,7 +270,8 @@ impl Core {
             bridge: tokio::sync::Mutex::new(None),
             auth_lock: tokio::sync::Mutex::new(()),
             sync_lock: tokio::sync::Mutex::new(()),
-            state_dirty: Notify::new(),
+            account_lock: tokio::sync::Mutex::new(()),
+            state_dirty,
             grants_dirty: Notify::new(),
             sync_wake: Notify::new(),
             account_tasks: Mutex::new(None),
@@ -279,6 +285,8 @@ impl Core {
         core.spawn_purger();
         core.apply_services().await;
         core.restore_session().await;
+        core.0
+            .reconcile_android(core.0.session.read().await.as_deref());
         core.0.state_dirty.notify_one();
         Ok(core)
     }
@@ -552,6 +560,7 @@ impl Core {
             user_key_b64,
             vault,
         } = done;
+        let _account_change = self.0.account_lock.lock().await;
         // Account switch: everything from the previous account is discarded.
         let previous = self
             .0
@@ -561,8 +570,9 @@ impl Core {
             .as_ref()
             .map(|s| s.user_id.clone());
         if previous.is_some() {
-            self.logout("account_switch").await;
+            self.logout_inner("account_switch").await;
         }
+        let mut current = self.0.session.write().await;
         self.0
             .platform
             .store_user_key(&session.user_id, user_key_b64.as_bytes())
@@ -594,16 +604,25 @@ impl Core {
                 let _ = self.0.config_store.save(&settings);
             }
         }
-        *self.0.session.write().await = Some(Arc::new(session));
+        *current = Some(Arc::new(session));
+        self.0.reconcile_android(current.as_deref());
+        drop(current);
         self.update_usability();
         self.start_account_tasks();
         Ok(())
     }
 
     pub async fn logout(&self, reason: &str) {
+        let _account_change = self.0.account_lock.lock().await;
+        self.logout_inner(reason).await;
+    }
+
+    async fn logout_inner(&self, reason: &str) {
         tracing::info!(reason, "Logging out");
         self.stop_account_tasks();
-        let session = self.0.session.write().await.take();
+        let mut current = self.0.session.write().await;
+        let session = current.take();
+        self.0.reconcile_android(None);
         lock(self.0.store.authz()).revoke_all();
         self.0.store.set_usable(false);
         self.0.store.forget_metadata();
@@ -624,6 +643,54 @@ impl Core {
         self.0.state_dirty.notify_one();
     }
 
+    async fn finish_android_pairing(&self, id: uuid::Uuid, code: &str) -> Result<()> {
+        let (account, cancel) = self.0.android.authorize_pairing(id, code)?;
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(anyhow!("Pairing expired or the phone disconnected")),
+            result = self.complete_android_pairing(id, &account) => result,
+        };
+        if result.is_err() {
+            self.0.android.cancel_pairing(id);
+        }
+        result
+    }
+
+    async fn complete_android_pairing(
+        &self,
+        id: uuid::Uuid,
+        account: &android::Account,
+    ) -> Result<()> {
+        let session = {
+            let _sync = self.0.sync_lock.lock().await;
+            let current = self.0.session.read().await;
+            let session = current
+                .as_ref()
+                .filter(|s| s.android_session_id == account.session)
+                .ok_or_else(|| anyhow!("The Bitwarden account changed"))?;
+            // Persist the binding even for sessions created before Android support.
+            self.0
+                .platform
+                .store_session(&session.session_blob().await?)?;
+            session.clone()
+        };
+        let key = self
+            .0
+            .authenticate_native(AuthPurpose::AndroidEnrollment, &session)
+            .await?;
+        let current = self.0.session.read().await;
+        anyhow::ensure!(
+            current.as_ref().is_some_and(|s| Arc::ptr_eq(s, &session)),
+            "The Bitwarden account changed"
+        );
+        let vault = lock(&self.0.vault)
+            .clone()
+            .ok_or_else(|| anyhow!("Sync Bitwarden before pairing"))?;
+        VaultDecryptor::new(&vault, &key)?.verify_user_key()
+            .map_err(|_| anyhow!("The account key changed. Sign out and sign in with your Bitwarden credentials, then pair again."))?;
+        self.0.android.finish_pairing(id, account, &key)
+    }
+
     // ---------- sync ----------
 
     pub async fn sync(&self, force: bool) -> Result<()> {
@@ -635,6 +702,13 @@ impl Core {
         lock(&self.0.status).syncing = true;
         self.0.state_dirty.notify_one();
         let result = session.sync_now(force).await;
+        // An in-flight sync from a previous account must not restore its session or keys.
+        let current = self.0.session.write().await;
+        if !current.as_ref().is_some_and(|s| Arc::ptr_eq(s, &session)) {
+            lock(&self.0.status).syncing = false;
+            self.0.state_dirty.notify_one();
+            return Err(anyhow!("Account changed during sync"));
+        }
         let mut st_err = None;
         match result {
             Ok(Some(vault)) => {
@@ -659,6 +733,7 @@ impl Core {
             }
             Err(e) => st_err = Some(e.to_string()),
         }
+        self.0.reconcile_android(current.as_deref());
         // Persist rotated tokens.
         if let Ok(blob) = session.session_blob().await {
             let _ = self.0.platform.store_session(&blob);
@@ -670,6 +745,7 @@ impl Core {
         }
         self.update_usability();
         self.0.state_dirty.notify_one();
+        drop(current);
         // A full sync parses the whole vault JSON although only SSH items are kept; give the
         // freed heap back to the OS instead of keeping it dirty in the malloc zones.
         release_free_memory();
@@ -770,6 +846,9 @@ impl Core {
 
     pub async fn system_event(&self, event: &str) {
         let s = lock(&self.0.settings).clone();
+        if matches!(event, "will_sleep" | "screen_locked" | "session_resigned") {
+            self.0.android.cancel_request();
+        }
         let logged_in = self.0.session.read().await.is_some();
         match event {
             "screen_locked" if s.lock_on_screen_lock => self.lock_agent("screen_lock"),
@@ -777,6 +856,8 @@ impl Core {
             "session_resigned" if s.lock_on_user_switch => self.lock_agent("user_switch"),
             // Restart notifications and catch up.
             "did_wake" | "network_up" | "session_active" if logged_in => {
+                self.0
+                    .reconcile_android(self.0.session.read().await.as_deref());
                 self.start_account_tasks();
             }
             _ => {}
@@ -789,6 +870,8 @@ impl Core {
         let validated = candidate.validate()?;
         self.0.config_store.save(&validated)?;
         *lock(&self.0.settings) = validated.clone();
+        self.0
+            .reconcile_android(self.0.session.read().await.as_deref());
         self.apply_services().await;
         self.update_usability();
         self.0.sync_wake.notify_one();
@@ -860,11 +943,18 @@ impl Core {
         lock(self.0.store.authz()).revoke_all();
         self.0.store.set_usable(false);
         self.0.store.forget_metadata();
+        self.0.android.reconcile(
+            self.0
+                .current_android_account(self.0.session.read().await.as_deref()),
+            false,
+            &*self.0.platform,
+        );
         self.0.shutdown.cancel();
     }
 
     /// "Reset Local Authentication State".
     pub async fn reset_local_auth(&self) {
+        self.0.android.cancel_request();
         self.lock_agent("reset");
         self.0.store.mark_metadata_incomplete();
         // Re-create the browser bridge so that all browser channel keys are dropped.
@@ -877,6 +967,7 @@ impl Core {
     /// Removes everything WardenFuse created (for uninstall). Does not touch other apps.
     pub async fn uninstall(&self) -> Value {
         self.logout("uninstall").await;
+        self.0.platform.delete_android_identity();
         let mut errors = Vec::new();
         if let Err(e) = self.0.manifests.uninstall_all() {
             errors.push(e.to_string());
@@ -974,6 +1065,7 @@ impl Core {
                 "biometry": self.0.platform.biometry_state(),
                 "keychain_mode": self.0.cfg.keychain_mode,
             },
+            "android": self.0.android.snapshot(),
             "settings": settings,
         })
     }
@@ -1039,6 +1131,33 @@ impl Core {
                     Ok(()) => json!({"ok": true}),
                     Err(e) => json!({"ok": false, "error": e.to_string()}),
                 },
+                "android_addresses" => json!({"ok": true, "addresses": Android::addresses()?}),
+                "android_begin_pairing" => {
+                    let address = cmd["address"].as_str().unwrap_or_default().parse()?;
+                    let name: String = cmd["name"].as_str().unwrap_or("Mac").chars()
+                        .filter(|c| !c.is_control()).take(48).collect();
+                    self.0.reconcile_android(self.0.session.read().await.as_deref());
+                    self.0.android.begin_pairing(address, &name)?
+                }
+                "android_finish_pairing" => {
+                    let id = serde_json::from_value(cmd["pairing_id"].clone())?;
+                    let code = cmd["code"].as_str().unwrap_or_default();
+                    let result = self.finish_android_pairing(id, code).await;
+                    result?;
+                    json!({"ok": true})
+                }
+                "android_cancel_pairing" => {
+                    self.0.android.cancel_pairing(serde_json::from_value(cmd["pairing_id"].clone())?);
+                    json!({"ok": true})
+                }
+                "android_remove_device" => {
+                    self.0.android.remove(serde_json::from_value(cmd["device_id"].clone())?)?;
+                    json!({"ok": true})
+                }
+                "android_cancel_request" => {
+                    self.0.android.cancel_request();
+                    json!({"ok": true})
+                }
                 "update_settings" => {
                     let s: Settings = serde_json::from_value(cmd["settings"].clone())?;
                     match self.update_settings(s).await {
@@ -1160,23 +1279,123 @@ fn to_meta(meta: Vec<crate::vault::KeyMeta>) -> Vec<MetaKeyData> {
 
 impl CoreInner {
     async fn authenticate(&self, purpose: AuthPurpose) -> Result<Zeroizing<Vec<u8>>, AuthFailure> {
-        let user_id = self
+        let session = self
             .session
             .read()
             .await
-            .as_ref()
-            .map(|s| s.user_id.clone())
+            .clone()
             .ok_or(AuthFailure::Unavailable)?;
+        self.authenticate_native(purpose, &session).await
+    }
+
+    fn current_android_account(
+        &self,
+        session: Option<&BitwardenSession>,
+    ) -> Option<android::Account> {
+        let session = session?;
+        let vault = lock(&self.vault);
+        let vault = vault.as_ref().filter(|v| v.user_id == session.user_id)?;
+        let key = vault.private_key.as_deref()?;
+        Some(android::Account::new(session.android_session_id, key))
+    }
+
+    fn reconcile_android(&self, session: Option<&BitwardenSession>) {
+        let enabled = {
+            let s = lock(&self.settings);
+            s.browser_unlock_enabled && s.browser_authentication == BrowserAuthentication::Android
+        } && !lock(&self.status).session_expired;
+        self.android.reconcile(
+            self.current_android_account(session),
+            enabled,
+            &*self.platform,
+        );
+    }
+
+    async fn browser_authenticate(
+        &self,
+        user_id: Option<&str>,
+        browser: &str,
+        verify: bool,
+    ) -> Result<Zeroizing<Vec<u8>>, AuthFailure> {
+        let session = self
+            .session
+            .read()
+            .await
+            .clone()
+            .ok_or(AuthFailure::Unavailable)?;
+        if user_id.is_some_and(|id| id != session.user_id) {
+            return Err(AuthFailure::Unavailable);
+        }
+        let (method, timeout) = {
+            let s = lock(&self.settings);
+            if !s.browser_unlock_enabled {
+                return Err(AuthFailure::Unavailable);
+            }
+            (
+                s.browser_authentication,
+                Duration::from_secs(s.android_timeout_secs),
+            )
+        };
+        let browser = browser.to_owned();
+        let (key, current) = match method {
+            BrowserAuthentication::Android => {
+                let account = self
+                    .current_android_account(Some(&session))
+                    .ok_or(AuthFailure::Unavailable)?;
+                let result = self
+                    .android
+                    .authenticate(&account, browser, verify, timeout)
+                    .await?;
+                let current = self.session.read().await;
+                if !self.android.still_valid(&account, &result) {
+                    return Err(AuthFailure::Cancelled);
+                }
+                (result.key, current)
+            }
+            BrowserAuthentication::Mac => {
+                let purpose = if verify {
+                    AuthPurpose::BrowserVerify { browser }
+                } else {
+                    AuthPurpose::BrowserUnlock { browser }
+                };
+                let key = self.authenticate_native(purpose, &session).await?;
+                (key, self.session.read().await)
+            }
+        };
+        let s = lock(&self.settings);
+        if !current.as_ref().is_some_and(|s| Arc::ptr_eq(s, &session))
+            || !s.browser_unlock_enabled
+            || s.browser_authentication != method
+        {
+            return Err(AuthFailure::Cancelled);
+        }
+        Ok(key)
+    }
+
+    async fn authenticate_native(
+        &self,
+        purpose: AuthPurpose,
+        session: &Arc<BitwardenSession>,
+    ) -> Result<Zeroizing<Vec<u8>>, AuthFailure> {
         let (allow_biometrics, allow_password) = {
             let s = lock(&self.settings);
             (s.prefer_touch_id, s.allow_password_fallback)
         };
         // One native authentication dialog at a time.
         let _g = self.auth_lock.lock().await;
+        if !self
+            .session
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|s| Arc::ptr_eq(s, session))
+        {
+            return Err(AuthFailure::Cancelled);
+        }
         let req = AuthRequest {
             reason: purpose.reason(),
             purpose,
-            user_id,
+            user_id: session.user_id.clone(),
             allow_biometrics,
             allow_password,
         };
@@ -1237,3 +1456,6 @@ impl CoreInner {
         }
     }
 }
+
+#[cfg(test)]
+mod android_tests;

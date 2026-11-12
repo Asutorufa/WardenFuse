@@ -19,6 +19,14 @@ pub const DEFAULT_SYNC_INTERVAL_SECS: u64 = 300;
 pub const DEFAULT_MAX_OFFLINE_HOURS: u64 = 72;
 pub const MAX_SSH_TTL_SECS: u64 = 24 * 3600;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAuthentication {
+    #[default]
+    Mac,
+    Android,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -35,6 +43,8 @@ pub struct Settings {
 
     // Browser integration
     pub browser_unlock_enabled: bool,
+    pub browser_authentication: BrowserAuthentication,
+    pub android_timeout_secs: u64,
 
     // SSH agent
     pub ssh_agent_enabled: bool,
@@ -64,6 +74,8 @@ impl Default for Settings {
             fallback_sync_interval_secs: DEFAULT_SYNC_INTERVAL_SECS,
             max_offline_hours: DEFAULT_MAX_OFFLINE_HOURS,
             browser_unlock_enabled: true,
+            browser_authentication: BrowserAuthentication::Mac,
+            android_timeout_secs: 30,
             ssh_agent_enabled: true,
             ssh_socket_path: default_socket_path().to_string_lossy().into_owned(),
             ssh_ttl_secs: DEFAULT_SSH_TTL_SECS,
@@ -95,6 +107,9 @@ impl Settings {
     /// Validates and normalizes. Returns an error describing the first invalid field.
     pub fn validate(mut self) -> Result<Self> {
         self.server_url = normalize_server_url(&self.server_url)?;
+        if !(10..=60).contains(&self.android_timeout_secs) {
+            bail!("Android authentication timeout must be between 10 and 60 seconds");
+        }
         if self.ssh_ttl_secs > MAX_SSH_TTL_SECS {
             bail!("SSH authentication TTL must be at most 24 hours");
         }

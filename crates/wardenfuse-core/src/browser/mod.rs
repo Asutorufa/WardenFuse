@@ -59,7 +59,7 @@ pub trait BrowserBackend: Send + Sync + 'static {
     /// Bitwarden user id logged into WardenFuse, if any.
     async fn logged_in_user(&self) -> Option<String>;
     async fn biometrics_status(&self, user_id: Option<&str>) -> LegacyBiometricsStatus;
-    /// Authenticates (Touch ID / password) and returns the user key (base64) for `user_id`.
+    /// Authenticates using the configured browser method and returns the user key (base64).
     /// Must return `None` for any other account. Never served from the SSH TTL cache.
     async fn unlock_user_key(&self, user_id: &str, browser: &str) -> Option<Zeroizing<String>>;
     async fn verify_user(&self, browser: &str) -> bool;
@@ -183,9 +183,9 @@ impl BrowserBridge {
             .read()
             .await
             .iter()
-            .map(|(id, (_, b))| ConnectionInfo {
+            .map(|(id, connection)| ConnectionInfo {
                 id: *id,
-                browser: b.clone(),
+                browser: connection.browser.clone(),
                 origin: String::new(),
             })
             .collect()
@@ -265,11 +265,17 @@ async fn handle_connection<B: BrowserBackend>(
         .to_owned();
     tracing::info!(id, %browser, "Browser connected");
 
+    let connection_cancel = cancel.child_token();
+    let _disconnect = connection_cancel.clone().drop_guard();
     let (tx, mut rx) = mpsc::channel::<String>(32);
-    connections
-        .write()
-        .await
-        .insert(id, (tx.clone(), browser.clone()));
+    connections.write().await.insert(
+        id,
+        sdk_ipc::Connection {
+            tx: tx.clone(),
+            browser: browser.clone(),
+            cancel: connection_cancel.clone(),
+        },
+    );
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -301,8 +307,13 @@ async fn handle_connection<B: BrowserBackend>(
         let backend = backend.clone();
         let tx = tx.clone();
         let browser = browser.clone();
+        let connection_cancel = connection_cancel.clone();
         tokio::spawn(async move {
-            let replies = legacy.lock().await.handle(&*backend, &browser, &msg).await;
+            let replies = tokio::select! {
+                biased;
+                () = connection_cancel.cancelled() => return,
+                replies = async { legacy.lock().await.handle(&*backend, &browser, &msg).await } => replies,
+            };
             for r in replies {
                 let _ = tx.send(r.to_string()).await;
             }

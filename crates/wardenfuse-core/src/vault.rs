@@ -188,23 +188,32 @@ impl<'a> VaultDecryptor<'a> {
             .get(org)
             .ok_or_else(|| anyhow!("missing organization key"))?;
         if !ctx.has_private_key(PrivateKeySlotId::UserPrivateKey) {
-            let pk = self
-                .vault
-                .private_key
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing account private key"))?;
-            let enc = EncString::from_str(pk).map_err(|_| anyhow!("invalid private key"))?;
-            let local = ctx
-                .unwrap_private_key(SymmetricKeySlotId::User, &enc)
-                .map_err(|_| anyhow!("unable to decrypt account private key"))?;
-            ctx.persist_private_key(local, PrivateKeySlotId::UserPrivateKey)
-                .map_err(|e| anyhow!("{e}"))?;
+            self.load_account_private_key(ctx)?;
         }
         let shared =
             UnsignedSharedKey::from_str(enc_org_key).map_err(|_| anyhow!("invalid org key"))?;
         shared
             .decapsulate(PrivateKeySlotId::UserPrivateKey, ctx)
             .map_err(|_| anyhow!("unable to decrypt organization key"))
+    }
+
+    /// Pair only with a user key that decrypts the current synced account key.
+    pub(crate) fn verify_user_key(&self) -> Result<()> {
+        self.load_account_private_key(&mut self.store.context_mut())
+    }
+
+    fn load_account_private_key(&self, ctx: &mut KeyStoreContext<'_, KeySlotIds>) -> Result<()> {
+        let pk = self
+            .vault
+            .private_key
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing account private key"))?;
+        let enc = EncString::from_str(pk).map_err(|_| anyhow!("invalid private key"))?;
+        let local = ctx
+            .unwrap_private_key(SymmetricKeySlotId::User, &enc)
+            .map_err(|_| anyhow!("unable to decrypt account private key"))?;
+        ctx.persist_private_key(local, PrivateKeySlotId::UserPrivateKey)
+            .map_err(|e| anyhow!("{e}"))
     }
 
     fn decrypt_str(

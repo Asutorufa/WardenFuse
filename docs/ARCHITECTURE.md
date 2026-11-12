@@ -16,9 +16,10 @@ WardenFuse.app  (one resident process, LSUIElement menu bar app)
     ├── Vault: encrypted SSH cipher cache, decryption with bitwarden-crypto KeyStore
     ├── SSH agent: vendored upstream BitwardenSSHAgent + GatedKeyStore + approver
     ├── Authorizations: fixed-TTL grants on a CLOCK_MONOTONIC clock
-    └── Browser bridge: UDS ~/.wardenfuse/browser.sock
-        ├── legacy native-messaging biometrics protocol (bitwarden-crypto)
-        └── SDK IPC endpoint "DesktopRenderer" (bitwarden-ipc, Noise)
+    ├── Browser bridge: UDS ~/.wardenfuse/browser.sock
+    │   ├── legacy native-messaging biometrics protocol (bitwarden-crypto)
+    │   └── SDK IPC endpoint "DesktopRenderer" (bitwarden-ipc, Noise)
+    └── Optional Android browser authentication: TLS listener and per-device key envelopes
 
 wardenfuse-nmh  (Contents/MacOS, started on demand by Chrome/Brave/Edge…, 400 KB, std only)
     stdin/stdout  ⇄  ~/.wardenfuse/browser.sock   (no secrets, no protocol logic)
@@ -45,6 +46,7 @@ Automatic and sudden termination are disabled so macOS never reaps the resident 
   (coalesced 30 ms). The UI never polls; the only timer is the TTL countdown, and only while
   the popover is open.
 * `auth_request(id, json)` → Swift → `wf_auth_complete(id, status, key)`
+  (`auth_cancel(id)` invalidates the matching dialog if the caller disconnects or times out).
 * Keychain callbacks (`keychain_store/load/delete`), `biometry_state`.
 
 The UI submits settings candidates; the core validates, persists (`settings.json`, 0600) and
@@ -119,6 +121,13 @@ sign request ─▶ grant valid? ──yes──▶ sign (private key still in s
 `get_private_key` re-checks the grant with the clock (fail closed even if the purge task is
 late). TTL 0 uses single-use authorizations valid for 30 s and purges immediately after use.
 
+## Android browser authentication
+
+Both browser transports use the same Rust backend. In Android mode the backend waits for the
+phone to unwrap the key for its local Bitwarden user-key envelope. The native authentication
+coordinator and protected Keychain item are used when pairing. The phone flow has no role in SSH
+authorization. See the [Android setup and security notes](ANDROID.md).
+
 ## Sync strategy
 
 1. Restore session from Keychain + encrypted cache, then sync.
@@ -138,7 +147,9 @@ configured maximum (default 72 h), the agent refuses to list or sign until a syn
 | Path | Content | Protection |
 |---|---|---|
 | Keychain `userkey.<user id>` | Bitwarden user key | user presence ACL (strong mode) |
-| Keychain `session` | refresh/access token, login method, server, email | `WhenUnlockedThisDeviceOnly` |
+| Keychain `session` | refresh/access token, login method, server, email, Android enrollment binding | `WhenUnlockedThisDeviceOnly` in strong mode |
+| Keychain `android.tls` | TLS certificate and private key | `WhenUnlockedThisDeviceOnly` in strong mode, login Keychain in ad-hoc builds |
+| `…/android-devices.json` | per-device encrypted envelopes, wrapped envelope keys and credential hashes | 0600, envelope key requires the paired device |
 | `~/Library/Application Support/WardenFuse/settings.json` | settings | 0600 |
 | `…/vault-cache.json` | SSH ciphers **as EncStrings** + wrapped org/private keys | 0600, encrypted by Bitwarden keys |
 | `~/.wardenfuse/ssh-agent.sock`, `browser.sock` | sockets | dir 0700, sockets 0600, peer uid check |
