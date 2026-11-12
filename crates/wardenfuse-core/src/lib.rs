@@ -3,6 +3,7 @@
 //! Linked as a static library into `WardenFuse.app` (single process). Contains all business
 //! logic; the SwiftUI layer only renders state and provides Keychain / LocalAuthentication.
 
+mod android;
 pub mod authz;
 pub mod bitwarden;
 pub mod browser;

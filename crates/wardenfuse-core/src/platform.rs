@@ -1,10 +1,7 @@
 //! Interface to the native (Swift) layer: Keychain and LocalAuthentication.
 //!
-//! The Rust core never decides that "Touch ID succeeded" on its own. The only way to obtain the
-//! Bitwarden user key after login is [`Platform::authenticate`], which the Swift layer
-//! implements by evaluating an `LAContext` and then reading the user key from a Keychain item
-//! whose `SecAccessControl` requires user presence, passing that evaluated context
-//! (`kSecUseAuthenticationContext`). The returned key bytes *are* the proof of authentication.
+//! Swift evaluates an `LAContext` for native authentication, then passes it to the
+//! user-presence Keychain read. The Android browser backend unseals a separate envelope in Rust.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -38,6 +35,8 @@ pub enum AuthPurpose {
     BrowserUnlock { browser: String },
     /// The browser extension asks for a plain user verification.
     BrowserVerify { browser: String },
+    /// Enroll an Android key using the existing Mac authentication policy.
+    AndroidEnrollment,
 }
 
 impl AuthPurpose {
@@ -67,6 +66,9 @@ impl AuthPurpose {
                 format!("unlock Bitwarden in {browser}")
             }
             Self::BrowserVerify { browser } => format!("verify your identity for {browser}"),
+            Self::AndroidEnrollment => {
+                "pair an Android device for Bitwarden browser unlock".to_owned()
+            }
         }
     }
 }
@@ -121,6 +123,17 @@ pub trait Platform: Send + Sync + 'static {
     fn store_session(&self, data: &[u8]) -> anyhow::Result<()>;
     fn load_session(&self) -> Option<Zeroizing<Vec<u8>>>;
     fn delete_session(&self);
+
+    /// TLS identity for the optional Android listener. This item contains no vault key.
+    fn load_android_identity(&self) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
+        anyhow::bail!("Android TLS identity storage unavailable")
+    }
+
+    fn store_android_identity(&self, _data: &[u8]) -> anyhow::Result<()> {
+        anyhow::bail!("Android TLS identity storage unavailable")
+    }
+
+    fn delete_android_identity(&self) {}
 
     fn biometry_state(&self) -> BiometryState;
 

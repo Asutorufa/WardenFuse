@@ -194,9 +194,13 @@ final class AuthCoordinator {
 
     /// Cancels the pending request (app termination). No secret is returned.
     func cancelAll() {
-        guard let s = active else { return }
-        s.finish(.cancelled)
-        release(s)
+        if let id = active?.id { cancel(id: id) }
+    }
+
+    func cancel(id: UInt64) {
+        guard let session = active, session.id == id else { return }
+        session.finish(.cancelled)
+        release(session)
     }
 
     private func release(_ session: Session) {

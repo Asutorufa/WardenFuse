@@ -2,7 +2,7 @@ import Foundation
 import LocalAuthentication
 import Security
 
-/// Keychain storage for the Bitwarden user key (protected) and the session blob.
+/// Keychain storage for the protected Bitwarden user key, session, and Android TLS identity.
 ///
 /// * **Strong mode** (app signed with a Team ID + `keychain-access-groups`): items live in the
 ///   data protection keychain. The user key item carries a `SecAccessControl` with
@@ -60,7 +60,8 @@ final class KeychainStore: @unchecked Sendable {
         SecItemDelete(query(account) as CFDictionary)
         var q = query(account)
         q[kSecValueData as String] = data
-        q[kSecAttrLabel as String] = "WardenFuse (\(protected ? "Bitwarden key" : "session"))"
+        let label = protected ? "Bitwarden key" : account == "android.tls" ? "Android TLS identity" : "session"
+        q[kSecAttrLabel as String] = "WardenFuse (\(label))"
         if mode == .strong {
             if protected {
                 var err: Unmanaged<CFError>?
@@ -78,14 +79,19 @@ final class KeychainStore: @unchecked Sendable {
         return SecItemAdd(q as CFDictionary, nil)
     }
 
-    /// Unprotected item (session blob).
-    func load(account: String) -> Data? {
+    /// Session or Android TLS identity. Neither item carries the user-presence ACL.
+    func load(account: String) -> (Data?, OSStatus) {
         var q = query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
+        if account == "android.tls" {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            q[kSecUseAuthenticationContext as String] = context
+        }
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
-        return out as? Data
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        return (out as? Data, status)
     }
 
     /// Protected item: requires an `LAContext` that was just evaluated by the caller.

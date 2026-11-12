@@ -23,6 +23,7 @@ use bitwarden_ipc::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 use super::{legacy::LegacyBiometricsStatus, BrowserBackend};
@@ -69,7 +70,13 @@ impl RpcRequest for AuthenticateBiometricsRequest {
 // ---- Communication backend over our NMH connections ----
 
 /// Outgoing frames per connection id.
-pub type ConnectionMap = Arc<RwLock<HashMap<i32, (mpsc::Sender<String>, String)>>>;
+pub type ConnectionMap = Arc<RwLock<HashMap<i32, Connection>>>;
+
+pub struct Connection {
+    pub(super) tx: mpsc::Sender<String>,
+    pub(super) browser: String,
+    pub(super) cancel: CancellationToken,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("destination unreachable")]
@@ -125,7 +132,7 @@ impl CommunicationBackend for NmhBackend {
             .read()
             .await
             .get(&conn)
-            .map(|(tx, _)| tx.clone())
+            .map(|connection| connection.tx.clone())
             .ok_or(Unreachable)?;
         tx.send(frame).await.map_err(|_| Unreachable)
     }
@@ -156,14 +163,15 @@ type Client = IpcClientImpl<
     InMemorySessionRepository<NoiseCryptoProviderState>,
 >;
 
-fn browser_of(conns: &HashMap<i32, (mpsc::Sender<String>, String)>, src: &Source) -> String {
-    match src {
-        Source::BrowserBackground { id: HostId::Id(n) } => conns
-            .get(n)
-            .map(|(_, b)| b.clone())
-            .unwrap_or_else(|| "your browser".into()),
-        _ => "your browser".into(),
-    }
+async fn browser_of(conns: &ConnectionMap, src: &Source) -> Option<(String, CancellationToken)> {
+    let Source::BrowserBackground { id: HostId::Id(id) } = src else {
+        return None;
+    };
+    conns
+        .read()
+        .await
+        .get(id)
+        .map(|c| (c.browser.clone(), c.cancel.clone()))
 }
 
 fn is_browser(src: &Source) -> bool {
@@ -195,14 +203,15 @@ struct UnlockHandler<B: ?Sized>(Arc<B>, ConnectionMap);
 impl<B: BrowserBackend + ?Sized> RpcHandler for UnlockHandler<B> {
     type Request = UnlockBiometricsRequest;
     async fn handle(&self, req: Self::Request, info: RpcRequestInfo) -> UnlockBiometricsResponse {
-        if !is_browser(&info.source) {
+        let Some((browser, disconnect)) = browser_of(&self.1, &info.source).await else {
             return UnlockBiometricsResponse { user_key: None };
-        }
-        let browser = browser_of(&*self.1.read().await, &info.source);
-        let key: Option<Zeroizing<String>> = self
-            .0
-            .unlock_user_key(&req.user_id.to_string(), &browser)
-            .await;
+        };
+        let user = req.user_id.to_string();
+        let key: Option<Zeroizing<String>> = tokio::select! {
+            biased;
+            () = disconnect.cancelled() => None,
+            key = self.0.unlock_user_key(&user, &browser) => key,
+        };
         UnlockBiometricsResponse {
             user_key: key.and_then(|k| SymmetricCryptoKey::try_from(k.as_str().to_owned()).ok()),
         }
@@ -213,11 +222,14 @@ struct VerifyHandler<B: ?Sized>(Arc<B>, ConnectionMap);
 impl<B: BrowserBackend + ?Sized> RpcHandler for VerifyHandler<B> {
     type Request = AuthenticateBiometricsRequest;
     async fn handle(&self, _req: Self::Request, info: RpcRequestInfo) -> bool {
-        if !is_browser(&info.source) {
+        let Some((browser, disconnect)) = browser_of(&self.1, &info.source).await else {
             return false;
+        };
+        tokio::select! {
+            biased;
+            () = disconnect.cancelled() => false,
+            result = self.0.verify_user(&browser) => result,
         }
-        let browser = browser_of(&*self.1.read().await, &info.source);
-        self.0.verify_user(&browser).await
     }
 }
 
@@ -300,4 +312,29 @@ impl SdkIpc {
     pub fn stop(&self) {
         self.cancel.cancel();
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn test_unlock(
+    backend: Arc<impl BrowserBackend>,
+    user_id: UserId,
+    cancel: CancellationToken,
+) -> UnlockBiometricsResponse {
+    let (tx, _rx) = mpsc::channel(1);
+    let connections = Arc::new(RwLock::new(HashMap::from([(
+        1,
+        Connection {
+            tx,
+            browser: "SDK browser".into(),
+            cancel,
+        },
+    )])));
+    UnlockHandler(backend, connections)
+        .handle(
+            UnlockBiometricsRequest { user_id },
+            RpcRequestInfo {
+                source: Source::BrowserBackground { id: HostId::Id(1) },
+            },
+        )
+        .await
 }

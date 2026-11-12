@@ -41,6 +41,7 @@ final class CoreBridge: ObservableObject {
             state_changed: wfStateChanged,
             command_result: wfCommandResult,
             auth_request: wfAuthRequest,
+            auth_cancel: wfAuthCancel,
             keychain_store: wfKeychainStore,
             keychain_load: wfKeychainLoad,
             keychain_delete: wfKeychainDelete,
@@ -125,6 +126,10 @@ private func wfAuthRequest(_ ctx: UnsafeMutableRawPointer?, _ id: UInt64, _ json
     }
 }
 
+private func wfAuthCancel(_ ctx: UnsafeMutableRawPointer?, _ id: UInt64) {
+    DispatchQueue.main.async { CoreBridge.shared.auth.cancel(id: id) }
+}
+
 /// Keychain operations are synchronous Security.framework calls, safe off the main thread.
 private let keychainForCallbacks = KeychainStore()
 
@@ -133,7 +138,8 @@ private func wfKeychainStore(
     _ len: Int, _ protectedItem: Bool
 ) -> Int32 {
     guard let account, let data else { return Int32(errSecParam) }
-    let d = Data(bytes: data, count: len)
+    var d = Data(bytes: data, count: len)
+    defer { d.resetBytes(in: 0..<d.count) }
     return keychainForCallbacks.store(account: String(cString: account), data: d, protected: protectedItem)
 }
 
@@ -142,9 +148,9 @@ private func wfKeychainLoad(
     _ out: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, _ outLen: UnsafeMutablePointer<Int>?
 ) -> Int32 {
     guard let account, let out, let outLen else { return Int32(errSecParam) }
-    guard var d = keychainForCallbacks.load(account: String(cString: account)) else {
-        return Int32(errSecItemNotFound)
-    }
+    let (loaded, status) = keychainForCallbacks.load(account: String(cString: account))
+    guard status == errSecSuccess else { return status }
+    guard var d = loaded else { return errSecDecode }
     let buf = malloc(max(d.count, 1))!.assumingMemoryBound(to: UInt8.self)
     d.copyBytes(to: buf, count: d.count)
     d.resetBytes(in: 0..<d.count)

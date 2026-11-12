@@ -1,0 +1,33 @@
+<resources>
+    <string name="app_name">WardenFuse</string>
+    <string name="scan">Scan pairing QR code</string>
+    <string name="scan_prompt">Scan the code in WardenFuse settings on your Mac.</string>
+    <string name="get_started">Open WardenFuse on your Mac. In Browser settings, select Android Biometric and pair a device.</string>
+    <string name="invalid_qr">This is not a valid WardenFuse pairing code.</string>
+    <string name="pairing">Connecting to %1$s for pairing…</string>
+    <string name="confirm">Enter %1$s in WardenFuse settings on %2$s to finish pairing.</string>
+    <string name="pair_failed">Pairing could not be confirmed. Check the paired devices on your Mac. If it is missing, forget this pairing and scan a new code.</string>
+    <string name="mac">Mac · %1$s</string>
+    <string name="connecting">Connecting to your Mac…</string>
+    <string name="disconnected">Mac unreachable. Connect both devices to the same local network.</string>
+    <string name="identity_changed">The Mac’s TLS identity did not match. Check the Mac and pair again.</string>
+    <string name="unpaired">Your Mac did not recognize this pairing. Remove the old device in Mac settings and pair again.</string>
+    <string name="waiting">Connected. Start biometric unlock in your Bitwarden browser extension.</string>
+    <string name="unlock_request">Unlock Bitwarden in %1$s on %2$s</string>
+    <string name="verify_request">Verify your identity for %1$s on %2$s</string>
+    <string name="approved">Bitwarden request approved.</string>
+    <string name="cancelled">Request cancelled.</string>
+    <string name="expired">Request expired. Start a new request from your browser.</string>
+    <string name="rejected">Your Mac rejected this request.</string>
+    <string name="interrupted">The connection closed before the Mac confirmed the request.</string>
+    <string name="approve">Authenticate</string>
+    <string name="authenticating">Authenticating…</string>
+    <string name="cancel">Cancel</string>
+    <string name="forget">Forget Mac</string>
+    <string name="forget_title">Forget this Mac?</string>
+    <string name="forget_detail">Remove this phone from the paired devices in WardenFuse on the Mac to revoke its registration there.</string>
+    <string name="strong_required">Set up a strong biometric and screen lock in Android settings.</string>
+    <string name="key_unavailable">The secure biometric key is unavailable. Use a compatible phone, or forget this pairing and pair again after changing your biometrics.</string>
+    <string name="local_error">WardenFuse could not read or update the local pairing. Forget this Mac or clear the app’s storage and pair again.</string>
+    <string name="camera_required">Pairing requires a camera to scan the code from your Mac.</string>
+</resources>

@@ -156,6 +156,21 @@ struct AuthCoordinatorTests {
         #expect(all.contains { $0.0 == 7 && $0.1 == .cancelled }, "app quit cancels pending request")
     }
 
+    @Test func coreCancellationInvalidatesOnlyTheMatchingRequest() async {
+        let results = Results()
+        let auth = MockAuthenticator(.never)
+        let reader = MockReader((key, errSecSuccess))
+        let c = coordinator({ auth }, reader: reader, results: results)
+        c.handle(id: 20, request: request(kind: "android_enrollment"))
+        c.cancel(id: 19)
+        #expect(c.hasActiveRequest)
+        c.cancel(id: 20)
+        #expect(await results.wait(count: 1)[0].1 == .cancelled)
+        #expect(auth.invalidated)
+        #expect(reader.reads.isEmpty)
+        #expect(!c.hasActiveRequest)
+    }
+
     @Test func policyMapping() {
         #expect(AuthPolicySelection.policy(allowBiometrics: true, allowPassword: true) == .deviceOwnerAuthentication)
         #expect(AuthPolicySelection.policy(allowBiometrics: true, allowPassword: false) == .deviceOwnerAuthenticationWithBiometrics)

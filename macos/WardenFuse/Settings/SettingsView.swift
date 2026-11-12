@@ -1,3 +1,4 @@
+import CoreImage.CIFilterBuiltins
 import AppKit
 import SwiftUI
 
@@ -429,7 +430,14 @@ private struct BrowserPane: View {
                     StatusValue(text: !s.browser.enabled ? "Off" : s.browser.bridgeRunning ? "Ready" : (s.browser.error ?? "Not running"),
                                 ok: s.browser.enabled && s.browser.bridgeRunning)
                 }
-                Note("In the official Bitwarden extension: Settings \u{2192} Account security \u{2192} Unlock with biometrics. Every unlock asks for Touch ID or your password and is independent of the SSH authorization time.")
+                Note("In the official Bitwarden extension, go to Settings \u{2192} Account security \u{2192} Unlock with biometrics. Each browser unlock requires fresh authentication.")
+                Picker("Browser authentication", selection: editor.binding(s.settings, \.browserAuthentication)) {
+                    Text("Touch ID / macOS Password").tag("mac")
+                    Text("Android Biometric").tag("android")
+                }
+            }
+            if s.settings.browserAuthentication == "android" {
+                AndroidSettings(snapshot: s, editor: editor)
             }
             Section("Native Messaging") {
                 let found = s.browser.manifests.filter { $0.state != "browser_not_found" }
@@ -488,6 +496,182 @@ private struct BrowserPane: View {
         Task {
             let r = await CoreBridge.shared.command(cmd, args)
             message = (r["ok"] as? Bool == true) ? "Done. Restart the browser if the extension does not connect." : (r["error"] as? String)
+        }
+    }
+}
+
+private struct AndroidSettings: View {
+    let snapshot: Snapshot
+    @ObservedObject var editor: SettingsEditor
+    @State private var showPairing = false
+    @State private var error: String?
+
+    var body: some View {
+        Section("Android Biometric") {
+            let android = snapshot.android
+            LabeledContent("Connection status") {
+                if !android.listening {
+                    Text("Unavailable")
+                } else if android.devices.isEmpty {
+                    Text("No paired devices")
+                } else {
+                    Text(android.devices.contains(where: \.connected) ? "Phone connected" : "Waiting for a phone")
+                }
+            }
+            if let message = android.error {
+                Note(message)
+            } else if snapshot.account.sessionExpired {
+                Note("Sign in to Bitwarden again to use Android authentication.")
+            } else if !android.listening && snapshot.account.loggedIn && snapshot.browser.enabled {
+                Note("Sync Bitwarden to load the account key before pairing.")
+            }
+            Picker("Authentication timeout", selection: editor.binding(snapshot.settings, \.androidTimeoutSecs)) {
+                ForEach(Array(Set([UInt64(15), 30, 45, 60, snapshot.settings.androidTimeoutSecs])).sorted(), id: \.self) { seconds in
+                    Text("\(seconds) seconds").tag(seconds)
+                }
+            }
+            if android.waitingForBrowserApproval {
+                LabeledContent("Waiting for Android approval") {
+                    Button("Cancel") { Task { await CoreBridge.shared.command("android_cancel_request") } }
+                }
+            }
+            Button("Pair Android Device…") { showPairing = true }
+                .disabled(!snapshot.account.loggedIn || !snapshot.browser.enabled)
+            if let error { Note(error) }
+        }
+        Section("Paired Devices") {
+            if snapshot.android.devices.isEmpty {
+                Note("No paired devices")
+            }
+            ForEach(snapshot.android.devices) { device in
+                LabeledContent {
+                    Button("Remove", role: .destructive) {
+                        Task {
+                            let reply = await CoreBridge.shared.command("android_remove_device", ["device_id": device.id])
+                            error = reply["error"] as? String
+                        }
+                    }
+                } label: {
+                    Text(device.name)
+                    Text(device.connected ? "Connected" : "Offline")
+                }
+            }
+        }
+        .sheet(isPresented: $showPairing) {
+            AndroidPairingSheet()
+        }
+    }
+}
+
+private struct AndroidPairingSheet: View {
+    @ObservedObject private var core = CoreBridge.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var addresses: [String] = []
+    @State private var address = ""
+    @State private var pairingId: String?
+    @State private var sawPairing = false
+    @State private var qr: NSImage?
+    @State private var code = ""
+    @State private var error: String?
+    @State private var working = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Pair Android Device").font(.title2.bold())
+            if let pairingId {
+                if core.snapshot?.android.pairingId == pairingId || !sawPairing {
+                    if core.snapshot?.android.pairingId == pairingId, let device = core.snapshot?.android.candidate {
+                        Text("Enter the eight-digit code shown on \(device), then authenticate on this Mac.")
+                        TextField("Pairing code", text: $code)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { if canConfirm { confirm(pairingId) } }
+                    } else if let qr {
+                        Text("Open WardenFuse on Android and scan this code within two minutes.")
+                        Image(nsImage: qr)
+                            .resizable().interpolation(.none).scaledToFit()
+                            .frame(width: 300, height: 300)
+                            .padding(16).background(.white)
+                            .accessibilityLabel("Android pairing QR code")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if !working {
+                    Text("This pairing session ended. Close this sheet to start again.")
+                }
+            } else if addresses.isEmpty {
+                Text("Connect this Mac and the phone to the same local network.")
+            } else {
+                Picker("Mac network address", selection: $address) {
+                    ForEach(addresses, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            if let error { Text(error).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).disabled(working && pairingId == nil)
+                if let pairingId, core.snapshot?.android.candidate != nil {
+                    Button("Confirm & Pair") { confirm(pairingId) }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!canConfirm)
+                } else if pairingId == nil {
+                    Button("Show QR Code") { start() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(address.isEmpty || working)
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .task {
+            let reply = await core.command("android_addresses")
+            addresses = reply["addresses"] as? [String] ?? []
+            address = addresses.first ?? ""
+            error = reply["error"] as? String
+        }
+        .onChange(of: core.snapshot?.android.pairingId) { _, id in
+            if id != nil && id == pairingId { sawPairing = true }
+        }
+        .onDisappear {
+            if let pairingId {
+                Task { await core.command("android_cancel_pairing", ["pairing_id": pairingId]) }
+            }
+        }
+        .interactiveDismissDisabled(working)
+    }
+
+    private var canConfirm: Bool { !working && code.utf8.count == 8 && code.utf8.allSatisfy { (48...57).contains($0) } }
+
+    private func start() {
+        working = true
+        Task {
+            defer { working = false }
+            let reply = await core.command("android_begin_pairing", [
+                "address": address, "name": Host.current().localizedName ?? "Mac",
+            ])
+            error = reply["error"] as? String
+            guard let payload = reply["qr"] as? String,
+                  let id = reply["pairing_id"] as? String else { return }
+            let filter = CIFilter.qrCodeGenerator()
+            filter.message = Data(payload.utf8)
+            if let image = filter.outputImage,
+               let cgImage = CIContext().createCGImage(image, from: image.extent) {
+                qr = NSImage(cgImage: cgImage, size: image.extent.size)
+                pairingId = id
+                sawPairing = core.snapshot?.android.pairingId == id
+            } else {
+                await core.command("android_cancel_pairing", ["pairing_id": id])
+                error = "Unable to generate the pairing QR code."
+            }
+        }
+    }
+
+    private func confirm(_ id: String) {
+        working = true
+        Task {
+            defer { working = false }
+            let reply = await core.command("android_finish_pairing", ["pairing_id": id, "code": code])
+            code = ""
+            error = reply["error"] as? String
+            if reply["ok"] as? Bool == true { dismiss() }
         }
     }
 }

@@ -19,6 +19,8 @@ typedef struct {
     void (*command_result)(void *ctx, uint64_t id, const char *json);
     /// Authenticate the user and read the protected user key; answer with wf_auth_complete.
     void (*auth_request)(void *ctx, uint64_t id, const char *json);
+    /// Invalidate the matching dialog when its caller has disconnected or timed out.
+    void (*auth_cancel)(void *ctx, uint64_t id);
     /// Store a Keychain item. protected_item = requires user presence. Returns 0 or OSStatus.
     int32_t (*keychain_store)(void *ctx, const char *account, const uint8_t *data, size_t len,
                               bool protected_item);

@@ -32,6 +32,7 @@ pub struct WFCallbacks {
     pub state_changed: extern "C" fn(ctx: *mut c_void, json: *const c_char),
     pub command_result: extern "C" fn(ctx: *mut c_void, id: u64, json: *const c_char),
     pub auth_request: extern "C" fn(ctx: *mut c_void, id: u64, json: *const c_char),
+    pub auth_cancel: extern "C" fn(ctx: *mut c_void, id: u64),
     /// Stores `data` under `account`. `protected_item` = user presence required. Returns 0 on
     /// success, an OSStatus otherwise.
     pub keychain_store: extern "C" fn(
@@ -74,30 +75,76 @@ struct FfiPlatform {
     pending: Mutex<HashMap<u64, AuthReply>>,
 }
 
+struct AuthWaiter<'a> {
+    platform: &'a FfiPlatform,
+    id: u64,
+}
+
+impl Drop for AuthWaiter<'_> {
+    fn drop(&mut self) {
+        let removed = self
+            .platform
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.id);
+        if removed.is_some() {
+            let cb = self.platform.cb;
+            (cb.auth_cancel)(cb.ctx, self.id);
+        }
+    }
+}
+
 fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', "")).unwrap_or_default()
+}
+
+const ANDROID_IDENTITY: &str = "android.tls";
+
+impl FfiPlatform {
+    fn load_unprotected(&self, account: &str) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
+        let acct = cstring(account);
+        let mut out: *mut u8 = std::ptr::null_mut();
+        let mut len = 0usize;
+        let rc = (self.cb.keychain_load)(self.cb.ctx, acct.as_ptr(), &mut out, &mut len);
+        if rc == -25300 {
+            return Ok(None); // errSecItemNotFound
+        }
+        anyhow::ensure!(rc == 0 && !out.is_null(), "Keychain error {rc}");
+        // SAFETY: Swift returns a malloc'ed buffer of `len` bytes that we now own.
+        let v = unsafe {
+            let slice = std::slice::from_raw_parts_mut(out, len);
+            let v = Zeroizing::new(slice.to_vec());
+            zeroize::Zeroize::zeroize(slice);
+            libc::free(out.cast());
+            v
+        };
+        Ok(Some(v))
+    }
+
+    fn store_unprotected(&self, account: &str, data: &[u8]) -> anyhow::Result<()> {
+        let acct = cstring(account);
+        let rc =
+            (self.cb.keychain_store)(self.cb.ctx, acct.as_ptr(), data.as_ptr(), data.len(), false);
+        anyhow::ensure!(rc == 0, "Keychain error {rc}");
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Platform for FfiPlatform {
     async fn authenticate(&self, request: AuthRequest) -> Result<Zeroizing<Vec<u8>>, AuthFailure> {
+        let json = serde_json::to_string(&request).map_err(|_| AuthFailure::Failed)?;
         let id = self.next_auth.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, tx);
-        let json = serde_json::to_string(&request).map_err(|_| AuthFailure::Failed)?;
+        let _waiter = AuthWaiter { platform: self, id };
         let c = cstring(&json);
         (self.cb.auth_request)(self.cb.ctx, id, c.as_ptr());
-        let res = rx.await.unwrap_or(Err(AuthFailure::UiUnavailable));
-        if res.is_err() {
-            self.pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&id);
-        }
-        res
+        rx.await.unwrap_or(Err(AuthFailure::UiUnavailable))
     }
 
     fn store_user_key(&self, user_id: &str, key: &[u8]) -> anyhow::Result<()> {
@@ -117,37 +164,28 @@ impl Platform for FfiPlatform {
     }
 
     fn store_session(&self, data: &[u8]) -> anyhow::Result<()> {
-        let acct = cstring("session");
-        let rc =
-            (self.cb.keychain_store)(self.cb.ctx, acct.as_ptr(), data.as_ptr(), data.len(), false);
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Keychain error {rc}"))
-        }
+        self.store_unprotected("session", data)
     }
 
     fn load_session(&self) -> Option<Zeroizing<Vec<u8>>> {
-        let acct = cstring("session");
-        let mut out: *mut u8 = std::ptr::null_mut();
-        let mut len = 0usize;
-        let rc = (self.cb.keychain_load)(self.cb.ctx, acct.as_ptr(), &mut out, &mut len);
-        if rc != 0 || out.is_null() {
-            return None;
-        }
-        // SAFETY: Swift returns a malloc'ed buffer of `len` bytes that we now own.
-        let v = unsafe {
-            let slice = std::slice::from_raw_parts_mut(out, len);
-            let v = Zeroizing::new(slice.to_vec());
-            zeroize::Zeroize::zeroize(slice);
-            libc::free(out.cast());
-            v
-        };
-        Some(v)
+        self.load_unprotected("session").ok().flatten()
     }
 
     fn delete_session(&self) {
         let acct = cstring("session");
+        (self.cb.keychain_delete)(self.cb.ctx, acct.as_ptr());
+    }
+
+    fn load_android_identity(&self) -> anyhow::Result<Option<Zeroizing<Vec<u8>>>> {
+        self.load_unprotected(ANDROID_IDENTITY)
+    }
+
+    fn store_android_identity(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.store_unprotected(ANDROID_IDENTITY, data)
+    }
+
+    fn delete_android_identity(&self) {
+        let acct = cstring(ANDROID_IDENTITY);
         (self.cb.keychain_delete)(self.cb.ctx, acct.as_ptr());
     }
 

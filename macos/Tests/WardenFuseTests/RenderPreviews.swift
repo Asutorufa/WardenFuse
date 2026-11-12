@@ -22,8 +22,9 @@ struct RenderPreviews {
                                  {"browser":{"id":"brave","name":"Brave","support_dir":"y"},"manifest_path":"/y","state":"installed","has_backup":false}],
                     "nmh_path":"/Applications/WardenFuse.app/Contents/MacOS/wardenfuse-nmh"},
          "security":{"biometry":"available","keychain_mode":"login_keychain_fallback"},
+         "android":{"listening":false,"waiting_for_browser_approval":false,"devices":[]},
          "settings":{"launch_at_login":true,"show_menu_bar_icon":true,"server_url":"https://vaultwarden.example.com","auto_sync":true,
-                     "fallback_sync_interval_secs":300,"max_offline_hours":72,"browser_unlock_enabled":true,"ssh_agent_enabled":true,
+                     "fallback_sync_interval_secs":300,"max_offline_hours":72,"browser_unlock_enabled":true,"browser_authentication":"mac","android_timeout_secs":30,"ssh_agent_enabled":true,
                      "ssh_socket_path":"/Users/rufa/.wardenfuse/ssh-agent.sock","ssh_ttl_secs":600,"ssh_approval_policy":"cache_for_ttl",
                      "ssh_scope_mode":"key_and_process","allow_agent_forwarding":false,"list_keys_when_locked":true,"prefer_touch_id":true,
                      "allow_password_fallback":true,"lock_on_screen_lock":true,"lock_on_sleep":true,"lock_on_user_switch":true,"clear_on_account_switch":true}}

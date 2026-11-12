@@ -9,6 +9,8 @@ struct CoreSettings: Codable, Equatable {
     var fallbackSyncIntervalSecs: UInt64
     var maxOfflineHours: UInt64
     var browserUnlockEnabled: Bool
+    var browserAuthentication: String
+    var androidTimeoutSecs: UInt64
     var sshAgentEnabled: Bool
     var sshSocketPath: String
     var sshTtlSecs: UInt64
@@ -91,6 +93,19 @@ struct Snapshot: Decodable, Equatable {
         var biometry: String
         var keychainMode: String
     }
+    struct Android: Decodable, Equatable {
+        struct Device: Decodable, Equatable, Identifiable {
+            var id: String
+            var name: String
+            var connected: Bool
+        }
+        var listening: Bool
+        var error: String?
+        var pairingId: String?
+        var candidate: String?
+        var waitingForBrowserApproval: Bool
+        var devices: [Device]
+    }
 
     var account: Account
     var login: Login
@@ -98,6 +113,7 @@ struct Snapshot: Decodable, Equatable {
     var ssh: Ssh
     var browser: Browser
     var security: Security
+    var android: Android
     var settings: CoreSettings
 }
 
